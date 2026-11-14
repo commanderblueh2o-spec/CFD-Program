@@ -94,3 +94,49 @@ export function levelingRate(gamma, mu, h0, k) { return (gamma * h0 * h0 * h0 * 
 
 // Poiseuille resistance per unit length of an elliptical duct (semi-axes a,b) [Pa·s/m^4]
 export function ellipseResistance(mu, a, b) { return (4 * mu * (a * a + b * b)) / (Math.PI * a ** 3 * b ** 3); }
+
+// Dip withdrawal speed profile (mm/s) as a function of the withdrawn fraction f ∈ [0, 1]
+// of the immersed length. Modes: 'constant'; 'ramp' (linear in withdrawn distance from
+// speed to speedEnd); 'steps' (speed, then speed2 from switch1Pct, then speedEnd from
+// switch2Pct). Slowing down toward the end thins the last-withdrawn (lower) part, which
+// counters the thickening there from drainage.
+export function dipSpeedAt(st, f) {
+  const v0 = Math.max(st.speed, 1e-6);
+  const mode = st.mode || 'constant';
+  if (mode === 'ramp') {
+    const v1 = Math.max(st.speedEnd ?? v0, 1e-6);
+    const x = Math.min(1, Math.max(0, f));
+    return v0 + (v1 - v0) * x;
+  }
+  if (mode === 'steps') {
+    const a = (st.switch1Pct ?? 50) / 100, b = (st.switch2Pct ?? 100) / 100;
+    if (f >= Math.max(a, b) && b < 1) return Math.max(st.speedEnd ?? v0, 1e-6);
+    if (f >= a) return Math.max(st.speed2 ?? v0, 1e-6);
+    return v0;
+  }
+  return v0;
+}
+
+// Time-position table for a profiled withdrawal of length D (m): returns { x, t, T } with
+// x[n] the withdrawn distance (m) at time t[n] (s) and T the total withdrawal time.
+export function dipWithdrawTable(st, D, n = 800) {
+  const x = new Float64Array(n + 1), t = new Float64Array(n + 1);
+  for (let k = 1; k <= n; k++) {
+    const fa = (k - 1) / n, fb = k / n, dx = (D / n);
+    x[k] = fb * D;
+    // Simpson on 1/v over the sub-interval (exact enough for ramps; steps are piecewise constant)
+    const va = dipSpeedAt(st, fa + 1e-12), vm = dipSpeedAt(st, 0.5 * (fa + fb)), vb = dipSpeedAt(st, fb - 1e-12);
+    t[k] = t[k - 1] + (dx / 6) * (1 / va + 4 / vm + 1 / vb) * 1e3;
+  }
+  return { x, t, T: t[n] };
+}
+
+// Withdrawn distance (m) after time tw (s) into the withdrawal, from a dipWithdrawTable.
+export function dipPositionAt(tab, tw) {
+  const { x, t } = tab, n = t.length - 1;
+  if (tw <= 0) return 0;
+  if (tw >= t[n]) return x[n] + (tw - t[n]) * 1e9; // past the end: fully out
+  let lo = 0, hi = n;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] <= tw) lo = mid; else hi = mid; }
+  return x[lo] + ((x[hi] - x[lo]) * (tw - t[lo])) / Math.max(t[hi] - t[lo], 1e-300);
+}

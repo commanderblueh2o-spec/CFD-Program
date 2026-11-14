@@ -84,9 +84,13 @@ export function computeMetrics(ctx, stages) {
   const predictions = [];
   for (const st of stages) {
     if (st.type === 'dip') {
-      const U = st.speed * 1e-3, Ca = (mu0 * U) / gamma;
-      const h = geo.surface === 'inner' ? brethertonFilm(Rmean, mu0, U, gamma) : dipFilmOuter(mu0, U, gamma, coat.rho, geo.flat ? Infinity : Rmean);
-      predictions.push({ stage: st.label || 'dip', text: `Ca = ${Ca.toExponential(2)}; entrained wet film ≈ ${(h * 1e6).toFixed(2)} µm (${geo.surface === 'inner' ? 'Bretherton' : 'LLD/fibre'} law) → dry ≈ ${(h * coat.solids * 1e6).toFixed(2)} µm before drainage` });
+      const film = (v) => { const U = v * 1e-3; return geo.surface === 'inner' ? brethertonFilm(Rmean, mu0, U, gamma) : dipFilmOuter(mu0, U, gamma, coat.rho, geo.flat ? Infinity : Rmean); };
+      const Ca = (mu0 * st.speed * 1e-3) / gamma, h = film(st.speed);
+      const law = geo.surface === 'inner' ? 'Bretherton' : 'LLD/fibre';
+      if (st.mode === 'ramp' || st.mode === 'steps') {
+        const vEnd = st.speedEnd ?? st.speed, hE = film(vEnd);
+        predictions.push({ stage: st.label || 'dip', text: `Profiled withdrawal ${st.speed}→${vEnd} mm/s: entrained wet film ≈ ${(h * 1e6).toFixed(2)} µm at the first-withdrawn end and ${(hE * 1e6).toFixed(2)} µm at the last (${law} law, ∝ speed^2/3) → dry ≈ ${(h * coat.solids * 1e6).toFixed(2)}–${(hE * coat.solids * 1e6).toFixed(2)} µm before drainage` });
+      } else predictions.push({ stage: st.label || 'dip', text: `Ca = ${Ca.toExponential(2)}; entrained wet film ≈ ${(h * 1e6).toFixed(2)} µm (${law} law) → dry ≈ ${(h * coat.solids * 1e6).toFixed(2)} µm before drainage` });
     }
     if (st.type === 'vacuum' && geo.surface === 'inner') {
       predictions.push({ stage: st.label || 'vacuum', text: `Plug pulled at ${st.pressureKpa} kPa. Bretherton film thickens as Ca^(2/3): halving meniscus speed thins the film by ~37%.` });

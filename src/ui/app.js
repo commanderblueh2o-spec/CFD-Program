@@ -184,7 +184,7 @@ function stageSummary(st) {
   const s = { ...STAGE_DEFAULTS[st.type], ...st };
   switch (st.type) {
     case 'plasma': return `${s.duration} s`;
-    case 'dip': return `${s.speed} mm/s`;
+    case 'dip': return s.mode === 'ramp' ? `${s.speed}→${s.speedEnd} mm/s ramp` : s.mode === 'steps' ? `${s.speed}/${s.speed2}/${s.speedEnd} mm/s steps` : `${s.speed} mm/s`;
     case 'spray': return `${s.flowMlMin} mL/min × ${s.passes}`;
     case 'drip': return s.mode === 'pump' ? `${s.pumpVolumeUl} µL @ ${s.pumpUlS} µL/s` : s.mode === 'bead' ? `${s.lines > 1 ? s.lines + ' × ' : ''}${s.beadUlS} µL/s` : `${s.count} × ${s.dropUl} µL`;
     case 'vacuum': return `${s.pressureKpa} kPa`;
@@ -230,7 +230,17 @@ function renderStages() {
       const body = el('div', { class: 'stage-body' });
       body.append(el('div', { class: 'hint' }, esc(sch.help)));
       const vals = { ...STAGE_DEFAULTS[st.type], ...st };
-      const set = (d) => (v, dragging) => { st[d.key] = v; if (d.key === 'mode') renderStages(); changed(dragging); };
+      const set = (d) => (v, dragging) => {
+        st[d.key] = v;
+        // first switch to a dip speed profile: start from a sensible slow-down of the current speed
+        if (st.type === 'dip' && d.key === 'mode' && v !== 'constant') {
+          const v0 = st.speed ?? STAGE_DEFAULTS.dip.speed, r = (x) => Math.max(0.01, Math.round(x * 100) / 100);
+          if (st.speedEnd === undefined) st.speedEnd = r(v0 * 0.4);
+          if (st.speed2 === undefined) st.speed2 = r(v0 * 0.7);
+        }
+        if (d.key === 'mode') renderStages();
+        changed(dragging);
+      };
       for (const d of sch.fields) {
         if (!fieldVisible(st, d) || !isMain(d)) continue;
         body.append(d.kind === 'select' ? numberRow(d, vals[d.key], set(d)) : sliderRow(d, vals[d.key], set(d)));
@@ -471,7 +481,7 @@ function activityOf(fr, st) {
   const ended = / \(end\)$/.test(fr.label);
   switch (st.type) {
     case 'plasma': bg = 'fx-plasma'; bits.push(`Plasma treating ${inner ? 'the bore' : 'the surface'}`); break;
-    case 'dip': if (fr.aux.bath !== undefined && !ended) { fx.push({ kind: 'bath', s: fr.aux.bath }); bits.push(`Withdrawing from the bath at ${st.speed} mm/s`); } else bits.push('Draining after dipping'); break;
+    case 'dip': if (fr.aux.bath !== undefined && !ended) { fx.push({ kind: 'bath', s: fr.aux.bath }); bits.push(`Withdrawing from the bath at ${fr.aux.withdraw ? fmt(fr.aux.withdraw * 1e3) : st.speed} mm/s`); } else bits.push('Draining after dipping'); break;
     case 'spray': if (fr.aux.nozzle !== null && fr.aux.nozzle !== undefined) { fx.push({ kind: 'spray', s: fr.aux.nozzle }); bits.push(`Spraying ${st.flowMlMin} mL/min`); } else bits.push('Spray settling'); break;
     case 'drip': if (fr.aux.nozzle !== undefined && !ended) { fx.push({ kind: 'needle', s: fr.aux.nozzle, fromEnd: st.mode === 'pump' ? 'start' : st.endMm > st.startMm ? 'end' : 'start' }); bits.push(st.mode === 'pump' ? `Pumping coating in at ${st.pumpUlS} µL/s` : st.mode === 'bead' ? `Needle laying ${st.lines > 1 ? st.lines + ' beads' : 'a bead'} (${st.beadUlS} µL/s)` : 'Dispensing drops'); } else bits.push('Coating spreading and draining'); break;
     case 'fill': {

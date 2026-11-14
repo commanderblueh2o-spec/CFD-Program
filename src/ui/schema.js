@@ -71,9 +71,14 @@ export const STAGE_SCHEMAS = {
   },
   dip: {
     name: 'Dip coating', color: 1,
-    help: 'Part dipped bottom-first and withdrawn at constant speed. Faster withdrawal = thicker film (∝ speed^2/3).',
+    help: 'Part dipped bottom-first and withdrawn from the bath. Faster withdrawal = thicker film (∝ speed^2/3). A speed profile that slows toward the end thins the lower part and counters the thickening there from drainage.',
     fields: [
-      f('speed', 'Withdrawal speed', 'mm/s', 0.01, 100, 0.01, '', { main: true, sl: [0.05, 50, 'log'] }),
+      sel('mode', 'Withdrawal profile', [['constant', 'Constant speed'], ['ramp', 'Linear ramp'], ['steps', 'Multi-step']], 'How the withdrawal speed changes along the immersed length.'),
+      f('speed', 'Withdrawal speed (start)', 'mm/s', 0.01, 100, 0.01, 'Speed as the top of the immersed part leaves the bath (the only speed for a constant profile).', { main: true, sl: [0.05, 50, 'log'] }),
+      f('speed2', 'Second-step speed', 'mm/s', 0.01, 100, 0.01, 'Speed after the first switch point.', { main: true, sl: [0.05, 50, 'log'], modes: ['steps'] }),
+      f('switch1Pct', 'First switch point', '% withdrawn', 0, 100, 1, 'Share of the immersed length withdrawn before changing to the second speed.', { modes: ['steps'] }),
+      f('switch2Pct', 'Second switch point', '% withdrawn', 0, 100, 1, 'Change to the end speed here (100 = two steps only).', { modes: ['steps'] }),
+      f('speedEnd', 'End speed', 'mm/s', 0.01, 100, 0.01, 'Speed as the bottom end leaves the bath.', { main: true, sl: [0.05, 50, 'log'], modes: ['ramp', 'steps'] }),
       f('drainAfter', 'Drain time', 's', 0, 3600, 1, 'Time hanging after withdrawal.', { main: true, sl: [0, 300, 'lin'] }),
       f('immersionMm', 'Immersion depth', 'mm', 0.5, 1e9, 0.5, 'From the bottom end (blank = whole part).'),
       f('dwell', 'Dwell in bath', 's', 0, 600, 1, ''),

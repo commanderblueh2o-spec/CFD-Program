@@ -5,7 +5,7 @@
 import { buildGeometry, gravityBody } from './geometry.js';
 import { FilmSolver } from './film.js';
 import { resolveCoating, resolveSubstrate, activatedSubstrate, contactAngleOWRK, wenzel } from './materials.js';
-import { dipFilmOuter, brethertonFilm, capillaryLength, ellipseResistance, viscosity, G0 } from './physics.js';
+import { dipFilmOuter, brethertonFilm, capillaryLength, ellipseResistance, viscosity, G0, dipSpeedAt, dipWithdrawTable, dipPositionAt } from './physics.js';
 import { computeMetrics } from './metrics.js';
 
 const AIR_RHO = 1.2, AIR_MU = 1.8e-5;
@@ -16,7 +16,7 @@ export const STAGE_TYPES = ['plasma', 'dip', 'spray', 'drip', 'fill', 'vacuum', 
 // Default parameters for each stage type (lengths mm, speeds mm/s unless noted).
 export const STAGE_DEFAULTS = {
   plasma: { duration: 20, power: 1.0, holdMinutes: 5, penetrationMm: 6, fromEnd: 'both', tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  dip: { speed: 2, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
+  dip: { speed: 2, mode: 'constant', speedEnd: 1, speed2: 1.5, switch1Pct: 50, switch2Pct: 80, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
   spray: { flowMlMin: 2, transferEff: 0.7, standoffMm: 40, coneDeg: 30, traverseMmS: 20, passes: 4, startMm: 0, endMm: 1e9, clockDeg: 90, inFlightEvapPct: 20, lanceSigmaMm: 2, tempC: 25, tilt: 90, rpm: 60, ambientAir: 0, drainAfter: 10 },
   drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
   fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
@@ -809,13 +809,10 @@ STAGES.dip = {
     const gamma = fs.gamma;
     const gcos = G0 * Math.cos(((st.tilt || 0) * Math.PI) / 180);
     const dp = { U, D, mu, gamma, sTop: geo.L - D, phase: 'dwell', plug: null };
-    // deposition thickness for each cell when it leaves the bath
-    dp.hOut = new Float64Array(geo.N);
-    for (let k = 0; k < geo.N; k++) {
-      const i = Math.floor(k / geo.Nj);
-      if (geo.surface === 'inner') dp.hOut[k] = brethertonFilm(geo.rHyd[i], mu, U, gamma);
-      else dp.hOut[k] = dipFilmOuter(mu, U, gamma, coat.rho, geo.flat ? Infinity : 1 / geo.kc[k], Math.max(gcos, 0.5));
-    }
+    // withdrawal speed profile: time ↔ withdrawn distance table
+    dp.tab = dipWithdrawTable(st, D);
+    dp.Umax = U;
+    for (let q = 0; q <= 100; q++) dp.Umax = Math.max(dp.Umax, dipSpeedAt(st, q / 100) * 1e-3);
     // capillary rise inside a lumen (Jurin) relative to the bath level
     dp.jurin = 0;
     if (geo.surface === 'inner') {
@@ -823,15 +820,26 @@ STAGES.dip = {
       dp.jurin = (2 * gamma * Math.cos(ctx.thetaMean)) / (coat.rho * Math.max(gcos, 0.5) * geo.rHyd[iTop]);
       dp.jurin = Math.max(-0.5 * D, Math.min(dp.jurin, geo.L));
     }
+    // deposition thickness for each cell when it leaves the bath (outside) or the meniscus
+    // passes it (inside), at the local withdrawal speed of the profile
+    dp.hOut = new Float64Array(geo.N);
+    for (let k = 0; k < geo.N; k++) {
+      const i = Math.floor(k / geo.Nj);
+      const xLeave = geo.s[i] - dp.sTop + (geo.surface === 'inner' ? dp.jurin : 0);
+      const Uk = dipSpeedAt(st, Math.min(1, Math.max(0, xLeave / Math.max(D, 1e-12)))) * 1e-3;
+      if (geo.surface === 'inner') dp.hOut[k] = brethertonFilm(geo.rHyd[i], mu, Uk, gamma);
+      else dp.hOut[k] = dipFilmOuter(mu, Uk, gamma, coat.rho, geo.flat ? Infinity : 1 / geo.kc[k], Math.max(gcos, 0.5));
+    }
     ctx._dip = dp;
     if (Math.abs(st.tilt || 0) > 60) ctx.warnings.push('Dip coating with a near-horizontal axis: deposition laws assume vertical withdrawal.');
-    return { duration: st.dwell + D / Math.max(U, 1e-9) + (geo.surface === 'inner' ? 1e9 : st.drainAfter), dynamic: geo.surface === 'inner' };
+    return { duration: st.dwell + dp.tab.T + (geo.surface === 'inner' ? 1e9 : st.drainAfter), dynamic: geo.surface === 'inner' };
   },
   hook(ctx, st, tl) {
     const { geo, fs } = ctx;
     const dp = ctx._dip;
     const tw = tl - st.dwell;
-    const sBath = tw <= 0 ? dp.sTop : Math.min(geo.L + 1e-9, dp.sTop + dp.U * tw);
+    const sBath = tw <= 0 ? dp.sTop : Math.min(geo.L + 1e-9, dp.sTop + ((st.mode||'constant')==='constant' ? dp.U * tw : dipPositionAt(dp.tab, tw)));
+    dp.Unow = dipSpeedAt(st, Math.min(1, Math.max(0, (sBath - dp.sTop) / Math.max(dp.D, 1e-12)))) * 1e-3;
     if (geo.surface !== 'inner') {
       for (let k = 0; k < geo.N; k++) {
         const i = Math.floor(k / geo.Nj);
@@ -839,7 +847,7 @@ STAGES.dip = {
         if (inBath) { fs.mask[k] = 1; fs.hFix[k] = dp.hOut[k]; fs.h[k] = dp.hOut[k]; fs.m[k] = dp.hOut[k] * ctx.coat.solids; fs.alpha[k] = 0; }
         else if (fs.mask[k]) { fs.mask[k] = 0; freshLiquid(ctx, k, dp.hOut[k]); }
       }
-      ctx.aux = { bath: Math.min(sBath, geo.L) };
+      ctx.aux = { bath: Math.min(sBath, geo.L), withdraw: dp.Unow };
       return;
     }
     // inner surface: meniscus sits at bath level minus capillary rise while the bottom is submerged
@@ -851,7 +859,7 @@ STAGES.dip = {
         if (filled) { fs.mask[k] = 1; fs.hFix[k] = dp.hOut[k]; fs.h[k] = dp.hOut[k]; fs.m[k] = dp.hOut[k] * ctx.coat.solids; fs.alpha[k] = 0; }
         else if (fs.mask[k]) { fs.mask[k] = 0; freshLiquid(ctx, k, dp.hOut[k]); }
       }
-      ctx.aux = { bath: Math.min(sBath, geo.L), meniscus: sMen };
+      ctx.aux = { bath: Math.min(sBath, geo.L), meniscus: sMen, withdraw: dp.Unow };
       if (sBath >= geo.L) {
         // bottom left the bath: the liquid column now drains under gravity
         const V = ctx.cumA(geo.L) - ctx.cumA(sMen);
@@ -879,7 +887,7 @@ STAGES.dip = {
     const dp = ctx._dip;
     if (!dp) return 1;
     if (dp.plug && !dp.plug.done) return Math.max(ctx.geo.ds / Math.max(dp.plug.speed, 1e-5) * 0.5, 1e-4);
-    return Math.max((ctx.geo.ds / Math.max(dp.U, 1e-6)) * 0.5, 1e-3);
+    return Math.max((ctx.geo.ds / Math.max(dp.Umax, 1e-6)) * 0.5, 1e-3);
   },
 };
 
@@ -904,7 +912,7 @@ export function simulate(spec, cb = {}) {
   const framesPerStage = spec.framesPerStage || 36;
   const maxWall = (spec.maxWallSeconds || 600) * 1000;
   // expected stage durations (for progress); dynamic stages estimated
-  const est = stages.map((s) => s.duration || (s.type === 'dip' ? (s.dwell + Math.min(s.immersionMm, 1e4) / s.speed + (s.drainAfter || 0)) : 20));
+  const est = stages.map((s) => s.duration || (s.type === 'dip' ? (s.dwell + dipWithdrawTable(s, Math.min(s.immersionMm, 1e4) * 1e-3, 100).T + (s.drainAfter || 0)) : 20));
   const totalEst = est.reduce((a, b) => a + b, 0) || 1;
   let doneEst = 0;
   frames.push(frameOf(ctx, -1, 'Start'));

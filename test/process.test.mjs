@@ -22,6 +22,40 @@ test('dip (coupon): film at the bath line matches Landau–Levich', () => {
   return `h = ${(h * 1e6).toFixed(1)} µm vs LLD ${(hLLD * 1e6).toFixed(1)} µm`;
 });
 
+test('dip speed ramp: film at the bath line follows LLD for the local speed; slowing down evens out a draining film', () => {
+  const c = { ...COATINGS.silicone_oil_350, ...oil };
+  const gam = (c.d + c.p) * 1e-3;
+  const mk = (stage) => simulate({
+    geometry: { type: 'coupon', length: 20, width: 6 }, substrate: 'pp', coating: 'silicone_oil_350', coatingOverrides: oil,
+    grid: { ns: 100, nphi: 6 }, stages: [{ type: 'dip', dwell: 0, drainAfter: 30, tilt: 0, ...stage }], framesPerStage: 60,
+  });
+  const ramp = mk({ mode: 'ramp', speed: 3, speedEnd: 0.5 });
+  const out = [];
+  for (const target of [0.006, 0.016]) {
+    const fr = ramp.frames.find((f) => f.aux.bath > target && f.aux.withdraw);
+    const i = Math.floor(fr.aux.bath / (20e-3 / 100)) - 2;
+    const s = (i + 0.5) * 0.2e-3;
+    const hL = dipFilmOuter(0.1, (3 + (0.5 - 3) * (s / 0.02)) * 1e-3, gam, c.rho, Infinity);
+    near(fr.h[i * 6 + 3], hL, 0.12, `film at ${(s * 1e3).toFixed(1)} mm`);
+    out.push(`${(s * 1e3).toFixed(0)} mm: ${(fr.h[i * 6 + 3] * 1e6).toFixed(1)}/${(hL * 1e6).toFixed(1)} µm`);
+  }
+  // fast-setting coating (no time to drain): the dry film keeps the local speed^(2/3) law
+  const dry = (coating, stage) => {
+    const r = simulate({ geometry: { type: 'coupon', length: 20, width: 6 }, substrate: 'glass', coating, grid: { ns: 100, nphi: 6 }, stages: [{ type: 'dip', dwell: 0, drainAfter: 60, tilt: 0, ...stage }] });
+    const m = r.frames[r.frames.length - 1].m;
+    return { at: (smm) => m[Math.floor(smm / 0.2) * 6 + 3], cov: r.metrics.dry.cov };
+  };
+  const rampS = { mode: 'ramp', speed: 2.5, speedEnd: 0.6 };
+  const fast = dry('silicone_disp', rampS);
+  const v = (smm) => 2.5 + (0.6 - 2.5) * ((Math.floor(smm / 0.2) + 0.5) * 0.2 / 20);
+  const want = Math.pow(v(15) / v(5), 2 / 3), got = fast.at(15) / fast.at(5);
+  near(got, want, 0.12, 'dry 15 mm / 5 mm ratio');
+  // drying while draining (PU/THF): a gentle slow-down evens out the drainage gradient
+  const cConst = dry('pu_thf', { speed: 1.5 }).cov, cRamp = dry('pu_thf', rampS).cov;
+  assert(cRamp < 0.9 * cConst, `ramp should improve uniformity: CoV ${(cRamp * 100).toFixed(0)}% vs ${(cConst * 100).toFixed(0)}%`);
+  return out.join(', ') + `; set-before-drain ratio ${got.toFixed(2)} vs (v15/v5)^2/3 ${want.toFixed(2)}; PU/THF CoV ${(cConst * 100).toFixed(0)}% → ${(cRamp * 100).toFixed(0)}%`;
+});
+
 test('vacuum withdraw leaves the Bretherton film for the controlled meniscus speed', () => {
   const spec = {
     geometry: { type: 'catheter', length: 30, od: 2, id: 1.2 }, surface: 'inner', substrate: 'pebax', coating: 'silicone_oil_350', coatingOverrides: oil,

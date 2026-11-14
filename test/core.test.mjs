@@ -3,7 +3,7 @@ import { PentaSolver, solveDense } from '../src/core/linalg.js';
 import { buildGeometry } from '../src/core/geometry.js';
 import { FilmSolver } from '../src/core/film.js';
 import { COATINGS, SUBSTRATES, contactAngleOWRK } from '../src/core/materials.js';
-import { levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength } from '../src/core/physics.js';
+import { levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength, dipSpeedAt, dipWithdrawTable, dipPositionAt } from '../src/core/physics.js';
 
 function rnd(seed) { let s = seed; return () => ((s = (s * 16807) % 2147483647) / 2147483647); }
 
@@ -109,6 +109,25 @@ test('dip-coating and Bretherton laws reproduce known limits', () => {
   near(hf, 1.34 * 50e-6 * Math.pow(Ca, 2 / 3), 0.05, 'thin fibre limit');
   const R = 1e-3, Cb = 1e-4;
   near(brethertonFilm(R, Cb * gamma, 1, gamma), 1.34 * R * Math.pow(Cb, 2 / 3), 0.02, 'Bretherton small Ca');
+});
+
+test('dip withdrawal profiles: ramp and step timing match closed forms', () => {
+  const D = 0.02; // 20 mm
+  // linear ramp in distance: v(x) = v0 + (v1 − v0) x/D → T = D ln(v1/v0)/(v1 − v0)
+  const ramp = { mode: 'ramp', speed: 3, speedEnd: 0.5 };
+  const tabR = dipWithdrawTable(ramp, D);
+  const Tr = (D * 1e3) * Math.log(0.5 / 3) / (0.5 - 3);
+  near(tabR.T, Tr, 1e-4, 'ramp withdrawal time');
+  // position after half the time is where ∫dx/v = T/2: x = D (v0/(v1−v0)) (exp((v1−v0)T/(2D))−1)
+  const xHalf = (3 / (0.5 - 3)) * (Math.exp(((0.5 - 3) * (Tr / 2)) / (D * 1e3)) - 1) * D;
+  near(dipPositionAt(tabR, Tr / 2), xHalf, 1e-3, 'ramp position at T/2');
+  // three steps: 2 mm/s to 40%, 1 mm/s to 75%, 0.5 mm/s to the end
+  const steps = { mode: 'steps', speed: 2, speed2: 1, speedEnd: 0.5, switch1Pct: 40, switch2Pct: 75 };
+  const Ts = 20 * (0.4 / 2 + 0.35 / 1 + 0.25 / 0.5);
+  near(dipWithdrawTable(steps, D).T, Ts, 2e-3, 'multi-step withdrawal time');
+  assert(dipSpeedAt(steps, 0.1) === 2 && dipSpeedAt(steps, 0.5) === 1 && dipSpeedAt(steps, 0.9) === 0.5, 'step speeds');
+  near(dipWithdrawTable({ speed: 2 }, D).T, 10, 1e-9, 'constant speed');
+  return `ramp T = ${tabR.T.toFixed(3)} s (exact ${Tr.toFixed(3)}), steps T = ${dipWithdrawTable(steps, D).T.toFixed(3)} s (exact ${Ts.toFixed(3)})`;
 });
 
 test('cylinder outer film shows Rayleigh–Plateau beading (thin fibre)', () => {

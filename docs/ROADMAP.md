@@ -34,9 +34,17 @@ Findings: with one pumped stream, coverage is limited by wetting (plasma reach) 
 
 Findings: fill/dwell/withdraw coats 100% of the bore (vs ~37% for a single pumped stream). The film follows the meniscus speed Q/A(s), so it is thinnest at the top of the wide chamber and thickest through the taper. Withdraw rate is the main thickness lever. 10 min of 60 °C air reaches ~82% cure, lowest toward the tip.
 
+## Done (v0.6) — dip withdrawal speed profiles
+- [x] Dip withdrawal profiles: constant, linear ramp (start → end speed along the immersed length) and multi-step (up to three speeds with two switch points); each cell takes the LLD/Bretherton film for the speed at which it leaves the bath
+- [x] Verified: ramp/step withdrawal times against closed forms; film at the bath line within 1% of LLD for the local speed; a fast-setting film keeps the (v₁/v₂)^2/3 ratio
+
+Findings: a profile only helps when the film drains before it sets. For PU/THF on a 20 mm coupon a gentle 2.5→0.6 mm/s ramp cuts the CoV from 31% to 24%. Too steep a slow-down (4→0.4 mm/s) lets the thick upper film drain onto the thin lower one and form a drainage front, so the bottom ends up thicker than at constant speed. Fast-setting coatings (silicone dispersion) and long-draining non-volatile oils (Jeffreys regime, independent of the deposit) gain nothing; for these a constant speed is best.
+Robustness note: `catheter_lumen_dip` is chaotically sensitive to tiny changes (speed 2 vs 2.001 mm/s → CoV 72% vs 55%), from the lumen column draining to and pooling at the tip. Results for that preset should be read as a range.
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
+- [ ] Make the lumen dip column drainage / tip pooling less sensitive to tiny parameter changes (see v0.6 robustness note)
 
 ## Done (v0.5) — wall excess and tip pooling (owner observation)
 - [x] Wall excess drains to the tip and pools, held by surface tension (won't drain on its own); bevel jets blow it out above ~2γ/r dynamic pressure (~16 m/s for this tip); otherwise it dries as a tip deposit
@@ -47,7 +55,6 @@ Findings: with HACS at 20 m/s bevel jets the tip pool is cleared; the oven route
 
 Earlier finding (wall excess after draining, before evaporative cooling): the drained cartridge still carries ~34 µL (65–105 µm wet) on its walls. Under 60 °C HACS air ~70% of it dries in place within ~1 min, and ~7 µL is pushed down and blown off at the bevel. Levers on the dry film: withdraw rate (10 vs 20 µL/s → −25%), air flow (60 vs 30 SCFH → −14%); a 60 s unheated pre-blow changes little (−4%) for 300 mPa·s HA.
 - [ ] Calibrate the HA preset against a measured SAICCS cartridge (coating volume, dry thickness, coverage, cure time)
-- [ ] Withdrawal speed profiles for dip coating (ramps and multi-step) to counter drainage gradients
 - [ ] Simultaneous inner + outer surface run (both walls of a tube in one simulation)
 - [ ] Marangoni stresses from solids-dependent surface tension (edge and picture-frame effects)
 - [ ] Side-by-side comparison of two runs (A/B) with difference maps

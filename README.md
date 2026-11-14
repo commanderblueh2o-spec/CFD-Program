@@ -5,7 +5,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 | Process | What is modelled |
 |---|---|
 | **Plasma activation** | Raises substrate polar surface energy (lower contact angle). Decays with depth inside lumens and recovers over time (hydrophobic recovery). |
-| **Dip coating** | Outer surface: Landau–Levich–Derjaguin / fibre entrainment. Lumen: filling with capillary rise, column drainage, Bretherton film behind the receding meniscus, and capillary hold-up of short columns. |
+| **Dip coating** | Constant, ramped or multi-step withdrawal speed. Outer surface: Landau–Levich–Derjaguin / fibre entrainment. Lumen: filling with capillary rise, column drainage, Bretherton film behind the receding meniscus, and capillary hold-up of short columns. |
 | **Spray coating** | Traversing nozzle with a Gaussian footprint, incidence angle, part rotation, transfer efficiency and in-flight solvent loss. Lumen: radial-spray lance. |
 | **Drip / pump insertion** | A fixed inserter nozzle fed by a peristaltic pump (rate and volume), discrete drops, or a bead laid by a moving needle; several nozzles can be spaced around the bore. Liquid that collects in a narrowing bore bridges into a plug, which drains, is pushed out by air, or stays held by capillarity. |
 | **Fill, dwell & withdraw (pumps)** | SAICCS insertion. Coating is pumped into the proximal opening while a peristaltic withdraw pump on the tip pulls it through (priming). The withdraw pump stops, the cartridge fills and dwells (held by back-pressure), then it is pumped out. The pump fixes the flow, so the meniscus speed is Q/A(s): slow in the wide chamber, fast in the nozzle. That sets the Bretherton film along the bore. |
