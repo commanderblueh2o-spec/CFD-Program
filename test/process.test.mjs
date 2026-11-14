@@ -44,11 +44,11 @@ test('narrow wetting lumen holds its liquid column after dip (capillary rise)', 
   assert(r.warnings.some((w) => /Capillary forces hold/.test(w)), 'expected capillary hold warning, got ' + JSON.stringify(r.warnings));
   assert(r.metrics.groups.jurinHeight_mm > 20, 'Jurin height should exceed the part length');
   // a weak air jet cannot clear it, a strong one can
-  const weak = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, nozzleSpeed: 2, fromEnd: 'start', tilt: 0 }] });
+  const weak = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, airFlowScfh: 0.5, nozzleDiaMm: 2, fromEnd: 'start', tilt: 0 }] });
   assert(weak.warnings.some((w) => /still held/.test(w)), 'weak air should fail to clear: ' + weak.warnings.join('; '));
-  const strong = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, nozzleSpeed: 100, fromEnd: 'start', tilt: 0 }] });
+  const strong = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, airFlowScfh: 40, nozzleDiaMm: 1, fromEnd: 'start', tilt: 0 }] });
   assert(!strong.warnings.some((w) => /still held/.test(w)), 'strong air should clear: ' + strong.warnings.join('; '));
-  return `Jurin height ${r.metrics.groups.jurinHeight_mm.toFixed(0)} mm; 100 m/s jet clears it, 2 m/s does not`;
+  return `Jurin height ${r.metrics.groups.jurinHeight_mm.toFixed(0)} mm; 40 SCFH clears it, 0.5 SCFH does not`;
 });
 
 test('wide lumen drains after dip and leaves a thin film', () => {

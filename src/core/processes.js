@@ -9,6 +9,7 @@ import { dipFilmOuter, brethertonFilm, capillaryLength, ellipseResistance, visco
 import { computeMetrics } from './metrics.js';
 
 const AIR_RHO = 1.2, AIR_MU = 1.8e-5;
+export const SCFH = 7.8658e-6; // m^3/s per standard cubic foot per hour
 
 export const STAGE_TYPES = ['plasma', 'dip', 'spray', 'drip', 'fill', 'vacuum', 'airflow', 'dwell', 'cure'];
 
@@ -20,7 +21,7 @@ export const STAGE_DEFAULTS = {
   drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
   fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
   vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  airflow: { duration: 20, nozzleSpeed: 10, airFlowScfh: 0, nozzleDiaMm: 2, captureFrac: 0.2, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
+  airflow: { duration: 20, nozzleSpeed: 0, airFlowScfh: 20, nozzleDiaMm: 2, captureFrac: 0.2, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetScfh: 0, crossJetDiaMm: 1.5, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   dwell: { duration: 60, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 0, rpm: 0, ambientAir: 0.3 },
 };
@@ -221,7 +222,7 @@ STAGES.airflow = {
     // corrected to the jet temperature, or given directly.
     let Unoz = st.nozzleSpeed || 0, Qnoz = 0;
     if ((st.airFlowScfh || 0) > 0) {
-      Qnoz = st.airFlowScfh * 7.8658e-6 * (Tjet / 293.15); // m^3/s actual
+      Qnoz = st.airFlowScfh * SCFH * (Tjet / 293.15); // m^3/s actual
       const dn = Math.max((st.nozzleDiaMm || 2) * 1e-3, 1e-4);
       Unoz = Math.min(Qnoz / (Math.PI * dn * dn / 4), 250);
     }
@@ -273,10 +274,14 @@ STAGES.airflow = {
     // liquid hanging at the opening. If it is not aligned with the bevel face it also shears
     // the film on that face toward the edge.
     fs.endStrip = null;
-    if ((st.crossJetSpeed || 0) > 0 && st.crossJetEnd && st.crossJetEnd !== 'none') {
+    // horizontal jets: flow in SCFH through a nozzle of crossJetDiaMm (or a speed in m/s)
+    const dX = Math.max((st.crossJetDiaMm || 1.5) * 1e-3, 1e-4);
+    const Ux = (st.crossJetScfh || 0) > 0 ? Math.min((st.crossJetScfh * SCFH * (Tamb / 293.15)) / (Math.PI * dX * dX / 4), 300) : (st.crossJetSpeed || 0);
+    ctx.crossJetDia = dX;
+    if (Ux > 0 && st.crossJetEnd && st.crossJetEnd !== 'none') {
       const reach = Math.max((st.crossJetReachMm ?? 1.5) * 1e-3, geo.ds);
-      const tauX = 0.0035 * AIR_RHO * st.crossJetSpeed * st.crossJetSpeed;
-      fs.endStrip = { end: st.crossJetEnd, reach, pDyn: 0.5 * AIR_RHO * st.crossJetSpeed * st.crossJetSpeed, lim: Math.max(2e-6, fs.gamma / (200 * Math.max(tauX, 1e-6))) };
+      const tauX = 0.0035 * AIR_RHO * Ux * Ux;
+      fs.endStrip = { end: st.crossJetEnd, reach, pDyn: 0.5 * AIR_RHO * Ux * Ux, lim: Math.max(2e-6, fs.gamma / (200 * Math.max(tauX, 1e-6))) };
       const mis = Math.abs(Math.sin(((st.crossJetAngleDeg || 0) * Math.PI) / 180));
       if (mis > 0) {
         const sign = st.crossJetEnd === 'end' ? 1 : -1;
@@ -789,7 +794,7 @@ STAGES.vacuum = {
     }
     fs.env.airU = airMax;
     lumenEvapFactor(ctx, true);
-    ctx.aux = { air: airMax };
+    ctx.aux = { air: airMax, airScfh: Q / SCFH };
     if (tl - ctx._vac.t0 >= st.airTime) ctx._stageDone = true;
   },
   dtMax(ctx) { return ctx._plug && !ctx._plug.done ? Math.max(ctx.geo.ds / Math.max(ctx._plug.speed, 1e-4) * 0.5, 1e-4) : 1; },
@@ -979,8 +984,11 @@ export function simulate(spec, cb = {}) {
       for (let k = 0; k < geo.N; k++) { const i = Math.floor(k / geo.Nj); const d = side === 0 ? geo.s[i] : geo.edgeEnd[k]; if (d >= 0 && d <= reach && !fs.mask[k]) { cells.push(k); A += geo.area[k]; } }
       if (!(A > 0)) { P.V = 0; P.M = 0; continue; }
       const eq = (P.M / A) * 1e6;
-      ctx.poolReport = { side, uL: P.V * 1e9, dryUm: eq, reachMm: reach * 1e3, jet: Math.sqrt((4 * fs.gamma) / (AIR_RHO * geo.rHyd[side ? geo.Ni - 1 : 0])) };
-      ctx.warnings.push(`About ${(P.V * 1e9).toFixed(2)} µL of coating is pooled at the ${side === 1 ? 'tip' : 'top'} opening at the end of the process (held by surface tension; it dries to a thick deposit of ~${eq.toFixed(1)} µm dry over the last ${(reach * 1e3).toFixed(1)} mm). Horizontal jets above ~${Math.sqrt((4 * fs.gamma) / (AIR_RHO * geo.rHyd[side ? geo.Ni - 1 : 0])).toFixed(0)} m/s at that opening would blow it out.`);
+      const uMin = Math.sqrt((4 * fs.gamma) / (AIR_RHO * geo.rHyd[side ? geo.Ni - 1 : 0]));
+      const dJ = ctx.crossJetDia || 1.5e-3;
+      const scfhMin = (uMin * Math.PI * dJ * dJ / 4) / SCFH;
+      ctx.poolReport = { side, uL: P.V * 1e9, dryUm: eq, reachMm: reach * 1e3, jet: uMin, jetScfh: scfhMin, jetDiaMm: dJ * 1e3 };
+      ctx.warnings.push(`About ${(P.V * 1e9).toFixed(2)} µL of coating is pooled at the ${side === 1 ? 'tip' : 'top'} opening at the end of the process (held by surface tension; it dries to a thick deposit of ~${eq.toFixed(1)} µm dry over the last ${(reach * 1e3).toFixed(1)} mm). Horizontal jets above ~${scfhMin.toFixed(1)} SCFH (through ${(dJ * 1e3).toFixed(1)} mm nozzles) at that opening would blow it out.`);
       for (const k of cells) { fs.h[k] += P.V / A; fs.m[k] += P.M / A; }
       P.V = 0; P.M = 0;
     }

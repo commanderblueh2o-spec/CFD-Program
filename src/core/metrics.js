@@ -144,7 +144,7 @@ export function computeMetrics(ctx, stages) {
   }
   if (ctx.poolReport && (ctx.poolReport.uL > 0.3 || ctx.poolReport.dryUm > 3 * Math.max(dryUm.p50, 0.05))) {
     const P = ctx.poolReport;
-    add(P.uL > 1 ? 'high' : 'medium', `Coating pooled at the ${P.side === 1 ? 'tip' : 'top'}`, `${P.uL.toFixed(1)} µL collected at the opening and dried there (~${P.dryUm.toFixed(0)} µm dry over the last ${P.reachMm.toFixed(1)} mm).`, `Surface tension holds it; horizontal jets faster than ~${P.jet.toFixed(0)} m/s aimed along the bevel blow it out (or reduce the wall excess with a slower withdraw).`);
+    add(P.uL > 1 ? 'high' : 'medium', `Coating pooled at the ${P.side === 1 ? 'tip' : 'top'}`, `${P.uL.toFixed(1)} µL collected at the opening and dried there (~${P.dryUm.toFixed(0)} µm dry over the last ${P.reachMm.toFixed(1)} mm).`, `Surface tension holds it; horizontal jets above ~${P.jetScfh.toFixed(1)} SCFH through ${P.jetDiaMm.toFixed(1)} mm nozzles (≈${P.jet.toFixed(0)} m/s) aimed along the bevel blow it out, or reduce the wall excess with a slower withdraw.`);
   }
   for (const w of ctx.warnings || []) if (!/pooled at the/.test(w)) add('info', 'Process note', w, '');
 

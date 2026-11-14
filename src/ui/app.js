@@ -189,12 +189,14 @@ function stageSummary(st) {
     case 'drip': return s.mode === 'pump' ? `${s.pumpVolumeUl} µL @ ${s.pumpUlS} µL/s` : s.mode === 'bead' ? `${s.lines > 1 ? s.lines + ' × ' : ''}${s.beadUlS} µL/s` : `${s.count} × ${s.dropUl} µL`;
     case 'vacuum': return `${s.pressureKpa} kPa`;
     case 'fill': return `dwell ${s.dwellS} s · out ${s.withdrawUlS} µL/s`;
-    case 'airflow': return [s.airFlowScfh > 0 ? `${s.airFlowScfh} SCFH${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : s.nozzleSpeed > 0 ? `${s.nozzleSpeed} m/s${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : '', s.crossJetSpeed > 0 && s.crossJetEnd !== 'none' ? `blow-off ${s.crossJetSpeed} m/s` : '', `${s.duration} s`].filter(Boolean).join(' · ');
+    case 'airflow': return [s.airFlowScfh > 0 ? `${s.airFlowScfh} SCFH${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : '', jetScfh(s) > 0 && s.crossJetEnd !== 'none' ? `jets ${fmt(jetScfh(s))} SCFH` : '', `${s.duration} s`].filter(Boolean).join(' · ');
     case 'dwell': return `${s.duration} s`;
     case 'cure': return s.mode === 'uv' ? `UV ${s.uvIntensity} mW/cm² · ${s.duration} s` : `${s.tempC} °C · ${fmt(s.duration / 60)} min`;
     default: return '';
   }
 }
+// older setups may give the jets in m/s; show everything in SCFH
+function jetScfh(s) { if (s.crossJetScfh > 0) return s.crossJetScfh; if (s.crossJetSpeed > 0) { const d = (s.crossJetDiaMm || 1.5) * 1e-3; return (s.crossJetSpeed * Math.PI * d * d / 4) / 7.8658e-6; } return 0; }
 function updateStageSummaries() { document.querySelectorAll('.stage').forEach((n, i) => { const st = state.spec.stages[i]; if (st) n.querySelector('.sum').textContent = stageSummary(st); }); }
 
 function fieldVisible(st, d) {
@@ -483,10 +485,10 @@ function activityOf(fr, st) {
       else bits.push(`Withdrawing at ${st.withdrawUlS} µL/s — meniscus ${fmt(F.speed * 1e3)} mm/s`);
       break;
     }
-    case 'vacuum': if (fr.aux.air) { fx.push({ kind: 'air', speed: fr.aux.air, dir: st.direction === 'back' ? -1 : 1, hot: false }); bits.push(`Vacuum drawing air through (${fmt(fr.aux.air)} m/s)`); } else bits.push(`Vacuum pulling the liquid out${fr.aux.speed ? ` at ${fmt(fr.aux.speed * 1e3)} mm/s` : ''}`); break;
+    case 'vacuum': if (fr.aux.air) { fx.push({ kind: 'air', speed: fr.aux.air, dir: st.direction === 'back' ? -1 : 1, hot: false }); bits.push(`Vacuum drawing air through (${fmt(fr.aux.airScfh ?? 0)} SCFH)`); } else bits.push(`Vacuum pulling the liquid out${fr.aux.speed ? ` at ${fmt(fr.aux.speed * 1e3)} mm/s` : ''}`); break;
     case 'airflow':
-      if (st.nozzleSpeed > 0 || st.airFlowScfh > 0) { const hot = st.airTempC > 40; fx.push({ kind: 'air', speed: st.airFlowScfh > 0 ? st.airFlowScfh / 4 : st.nozzleSpeed, dir: st.fromEnd === 'end' ? -1 : 1, hot }); bits.push(`${hot ? `Heated air ${st.airTempC} °C` : 'Air'} ${st.airFlowScfh > 0 ? st.airFlowScfh + ' SCFH' : st.nozzleSpeed + ' m/s'} ${inner ? 'down the bore' : 'over the part'}`); if (hot) bg = 'fx-warm'; }
-      if (st.crossJetSpeed > 0 && st.crossJetEnd !== 'none') { fx.push({ kind: 'cross', end: st.crossJetEnd }); bits.push(`horizontal jets clearing the ${st.crossJetEnd === 'end' ? 'tip bevel' : 'top opening'}`); }
+      if (st.nozzleSpeed > 0 || st.airFlowScfh > 0) { const hot = st.airTempC > 40; fx.push({ kind: 'air', speed: st.airFlowScfh > 0 ? st.airFlowScfh / 4 : st.nozzleSpeed, dir: st.fromEnd === 'end' ? -1 : 1, hot }); bits.push(`${hot ? `Heated air ${st.airTempC} °C` : 'Air'} ${st.airFlowScfh > 0 ? st.airFlowScfh + ' SCFH' : fmt((st.nozzleSpeed * Math.PI * (st.nozzleDiaMm || 2) ** 2 / 4e6) / 7.8658e-6) + ' SCFH'} ${inner ? 'down the bore' : 'over the part'}`); if (hot) bg = 'fx-warm'; }
+      if (jetScfh(st) > 0 && st.crossJetEnd !== 'none') { fx.push({ kind: 'cross', end: st.crossJetEnd }); bits.push(`horizontal jets ${fmt(jetScfh(st))} SCFH clearing the ${st.crossJetEnd === 'end' ? 'tip bevel' : 'top opening'}`); }
       if (fr.aux && fr.aux.meniscus !== undefined && fr.aux.front !== undefined) bits.push('liquid plug in the bore');
       break;
     case 'dwell': bits.push(`Resting at ${st.tempC} °C — levelling, draining and drying`); break;
