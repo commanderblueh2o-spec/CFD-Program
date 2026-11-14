@@ -188,6 +188,7 @@ function stageSummary(st) {
     case 'spray': return `${s.flowMlMin} mL/min × ${s.passes}`;
     case 'drip': return s.mode === 'pump' ? `${s.pumpVolumeUl} µL @ ${s.pumpUlS} µL/s` : s.mode === 'bead' ? `${s.lines > 1 ? s.lines + ' × ' : ''}${s.beadUlS} µL/s` : `${s.count} × ${s.dropUl} µL`;
     case 'vacuum': return `${s.pressureKpa} kPa`;
+    case 'fill': return `dwell ${s.dwellS} s · out ${s.withdrawUlS} µL/s`;
     case 'airflow': return [s.airFlowScfh > 0 ? `${s.airFlowScfh} SCFH${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : s.nozzleSpeed > 0 ? `${s.nozzleSpeed} m/s${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : '', s.crossJetSpeed > 0 && s.crossJetEnd !== 'none' ? `blow-off ${s.crossJetSpeed} m/s` : '', `${s.duration} s`].filter(Boolean).join(' · ');
     case 'dwell': return `${s.duration} s`;
     case 'cure': return s.mode === 'uv' ? `UV ${s.uvIntensity} mW/cm² · ${s.duration} s` : `${s.tempC} °C · ${fmt(s.duration / 60)} min`;
@@ -318,7 +319,7 @@ function validate(spec) {
   const g = spec.geometry;
   if (g.type === 'catheter' && g.id >= g.od) errs.push('Inner diameter must be smaller than the outer diameter.');
   if (!spec.stages.length) errs.push('Add at least one process stage.');
-  if (!spec.stages.some((s) => ['dip', 'spray', 'drip', 'vacuum'].includes(s.type))) errs.push('No stage applies coating: add a dip, spray, drip or vacuum stage.');
+  if (!spec.stages.some((s) => ['dip', 'spray', 'drip', 'fill', 'vacuum'].includes(s.type))) errs.push('No stage applies coating: add a dip, spray, drip, fill or vacuum stage.');
   return errs;
 }
 
@@ -382,7 +383,7 @@ function frameAt(p) {
   const a = F[i0], b = F[i1], B = res._buf;
   for (const key of ['h', 'm', 'alpha', 'T']) { const A0 = a[key], A1 = b[key], O = B[key]; for (let k = 0; k < O.length; k++) O[k] = A0[k] + (A1[k] - A0[k]) * f; }
   const near = f < 0.5 ? a : b;
-  return { h: B.h, m: B.m, alpha: B.alpha, T: B.T, t: a.t + (b.t - a.t) * f, label: near.label, stage: near.stage, aux: near.aux };
+  return { h: B.h, m: B.m, alpha: B.alpha, T: B.T, mask: near.mask, t: a.t + (b.t - a.t) * f, label: near.label, stage: near.stage, aux: near.aux };
 }
 
 function fieldValues(fr, key) {
@@ -410,6 +411,7 @@ function stateColors(fr) {
   const rgb = new Float32Array(3 * n), gloss = new Float32Array(n);
   const canDry = c.solids < c.phiMax, curing = c.cure.model !== 'none';
   for (let k = 0; k < n; k++) {
+    if (fr.mask && fr.mask[k] === 1) { rgb[3 * k] = 0.08; rgb[3 * k + 1] = 0.30; rgb[3 * k + 2] = 0.80; gloss[k] = 1; continue; } // flooded / bath / plug
     const w = fr.h[k] - hp;
     if (w <= 3 * hp) continue;
     const t = clamp(0.5 + 0.45 * Math.log10(w / res._wetRef), 0, 1);
@@ -463,6 +465,17 @@ function activityOf(fr, st) {
     case 'dip': if (fr.aux.bath !== undefined && !ended) { fx.push({ kind: 'bath', s: fr.aux.bath }); bits.push(`Withdrawing from the bath at ${st.speed} mm/s`); } else bits.push('Draining after dipping'); break;
     case 'spray': if (fr.aux.nozzle !== null && fr.aux.nozzle !== undefined) { fx.push({ kind: 'spray', s: fr.aux.nozzle }); bits.push(`Spraying ${st.flowMlMin} mL/min`); } else bits.push('Spray settling'); break;
     case 'drip': if (fr.aux.nozzle !== undefined && !ended) { fx.push({ kind: 'needle', s: fr.aux.nozzle, fromEnd: st.mode === 'pump' ? 'start' : st.endMm > st.startMm ? 'end' : 'start' }); bits.push(st.mode === 'pump' ? `Pumping coating in at ${st.pumpUlS} µL/s` : st.mode === 'bead' ? `Needle laying ${st.lines > 1 ? st.lines + ' beads' : 'a bead'} (${st.beadUlS} µL/s)` : 'Dispensing drops'); } else bits.push('Coating spreading and draining'); break;
+    case 'fill': {
+      const F = fr.aux || {};
+      const tl = fr.t - (state.result.stageInfo[fr.stage]?.tStart ?? 0);
+      if (ended || F.filling === undefined) { bits.push('Cartridge emptied — film left on the bore'); break; }
+      if (F.nozzle !== undefined) fx.push({ kind: 'needle', s: F.nozzle, fromEnd: st.fillFrom === 'end' ? 'end' : 'start' });
+      if (tl < (st.primeS || 0)) bits.push('Priming: coating pumped in and pulled through the tip by the withdraw pump');
+      else if (F.nozzle !== undefined) bits.push('Withdraw pump stopped — cartridge filling');
+      else if (!F.speed) bits.push(`Dwell: cartridge full, held by back-pressure (${st.dwellS} s)`);
+      else bits.push(`Withdrawing at ${st.withdrawUlS} µL/s — meniscus ${fmt(F.speed * 1e3)} mm/s`);
+      break;
+    }
     case 'vacuum': if (fr.aux.air) { fx.push({ kind: 'air', speed: fr.aux.air, dir: st.direction === 'back' ? -1 : 1, hot: false }); bits.push(`Vacuum drawing air through (${fmt(fr.aux.air)} m/s)`); } else bits.push(`Vacuum pulling the liquid out${fr.aux.speed ? ` at ${fmt(fr.aux.speed * 1e3)} mm/s` : ''}`); break;
     case 'airflow':
       if (st.nozzleSpeed > 0 || st.airFlowScfh > 0) { const hot = st.airTempC > 40; fx.push({ kind: 'air', speed: st.airFlowScfh > 0 ? st.airFlowScfh / 4 : st.nozzleSpeed, dir: st.fromEnd === 'end' ? -1 : 1, hot }); bits.push(`${hot ? `Heated air ${st.airTempC} °C` : 'Air'} ${st.airFlowScfh > 0 ? st.airFlowScfh + ' SCFH' : st.nozzleSpeed + ' m/s'} ${inner ? 'down the bore' : 'over the part'}`); if (hot) bg = 'fx-warm'; }
@@ -493,14 +506,14 @@ function updateViews() {
     $('#legend').innerHTML = `<span class="lg-num">${state.field !== 'temp' && state.field !== 'theta' ? 'bare · ' : ''}${fmt(range[0])}</span><i class="lg-grad" style="background:${gradientCSS(state.cmap)}"></i><span class="lg-num">${fmt(range[1])} ${fieldDef.unit}</span>`;
   }
   const film = new Float32Array(fr.h.length);
-  let hmax = 0; for (let k = 0; k < film.length; k++) { film[k] = Math.max(0, fr.h[k] - hp); hmax = Math.max(hmax, film[k]); }
+  let hmax = 0; for (let k = 0; k < film.length; k++) { film[k] = Math.max(0, fr.h[k] - hp); if (!(fr.mask && fr.mask[k] === 1)) hmax = Math.max(hmax, film[k]); }
   const ex = Number($('#exag').value);
   const rref = Math.max(...res.geometry.A) || res.geometry.L * 0.05;
   view3d.exag = ex > 0 ? (ex / 100) * (0.35 * rref) / Math.max(hmax, 4 * res._wetRef) : 0;
   view3d.cutaway = $('#cutaway').checked;
   view3d.tilt = st ? st.tilt ?? 90 : (res.spec.stages[0]?.tilt ?? STAGE_DEFAULTS[res.spec.stages[0]?.type]?.tilt ?? 90);
   let bare = null;
-  if (state.field !== 'theta' && state.field !== 'temp') { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp ? 1 : 0; }
+  if (state.field !== 'theta' && state.field !== 'temp') { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) ? 1 : 0; }
   const act = activityOf(fr, st);
   if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, film, marks, bare, sc.rgb, sc.gloss); }
   else view3d.setField(vals, range, state.cmap, film, marks, bare);
@@ -644,7 +657,7 @@ function renderResultsPanel() {
       <table class="kv">
         <tr><td>Dispensed / sprayed</td><td>${fmt(m.massBalance.deposited_uL)} µL</td></tr>
         <tr><td>Solvent evaporated</td><td>${fmt(m.massBalance.evaporated_uL)} µL</td></tr>
-        <tr><td>Dripped / blown off</td><td>${fmt(m.massBalance.dripped_uL)} µL</td></tr>
+        <tr><td>Dripped / blown off / withdrawn</td><td>${fmt(m.massBalance.dripped_uL)} µL</td></tr>
         <tr><td>Left on the part (solids)</td><td>${fmt(m.massBalance.film_uL)} (${fmt(m.massBalance.solids_uL)}) µL</td></tr>
       </table>
       <h4>Stages</h4>

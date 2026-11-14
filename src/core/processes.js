@@ -10,7 +10,7 @@ import { computeMetrics } from './metrics.js';
 
 const AIR_RHO = 1.2, AIR_MU = 1.8e-5;
 
-export const STAGE_TYPES = ['plasma', 'dip', 'spray', 'drip', 'vacuum', 'airflow', 'dwell', 'cure'];
+export const STAGE_TYPES = ['plasma', 'dip', 'spray', 'drip', 'fill', 'vacuum', 'airflow', 'dwell', 'cure'];
 
 // Default parameters for each stage type (lengths mm, speeds mm/s unless noted).
 export const STAGE_DEFAULTS = {
@@ -18,6 +18,7 @@ export const STAGE_DEFAULTS = {
   dip: { speed: 2, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
   spray: { flowMlMin: 2, transferEff: 0.7, standoffMm: 40, coneDeg: 30, traverseMmS: 20, passes: 4, startMm: 0, endMm: 1e9, clockDeg: 90, inFlightEvapPct: 20, lanceSigmaMm: 2, tempC: 25, tilt: 90, rpm: 60, ambientAir: 0, drainAfter: 10 },
   drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
+  fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
   vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   airflow: { duration: 20, nozzleSpeed: 10, airFlowScfh: 0, nozzleDiaMm: 2, captureFrac: 0.5, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   dwell: { duration: 60, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
@@ -295,7 +296,7 @@ function plugDt(ctx) { const p = ctx.plug; return p && !p.done && p.speed > 0 ? 
 function managePlug(ctx, st) {
   const { geo, fs } = ctx;
   if (geo.surface !== 'inner' || geo.flat) return;
-  if (st.type === 'dip' || st.type === 'vacuum') return;
+  if (st.type === 'dip' || st.type === 'vacuum' || st.type === 'fill') return;
   const gS = fs.env.g[2];
   const air = st.type === 'airflow' && ctx.airPush ? ctx.airPush : { p: 0, dir: 1 };
   if (!ctx.plug && ctx.trapped) {
@@ -544,7 +545,8 @@ function plugStep(ctx, plug, dt, drive) {
   const pcRear = (2 * gamma * cth) / geo.rHyd[iR];
   const pcFront = frontInside ? (2 * gamma * cth) / geo.rHyd[ctx.iOf(sf)] : 0;
   const dP = drive(plug, hi - lo) - pcRear + pcFront;
-  let U0 = dP > 0 ? dP / Rv / geo.crossArea[iR] : 0;
+  // a positive-displacement (peristaltic) pump sets the flow: the meniscus speed is Q / A(s)
+  let U0 = plug.flowQ > 0 ? plug.flowQ / geo.crossArea[iR] : dP > 0 ? dP / Rv / geo.crossArea[iR] : 0;
   if (U0 < 1e-7) { plug.stuck = true; plug.speed = 0; } // balanced by capillarity (creeping < 0.1 µm/s)
   else {
     plug.stuck = false;
@@ -593,6 +595,99 @@ function plugStep(ctx, plug, dt, drive) {
     }
   }
 }
+
+// Fill, dwell & withdraw (SAICCS insertion): coating is pumped into one opening while a
+// peristaltic withdraw pump on the other opening first pulls it through (priming), then stops
+// so the bore fills completely; the liquid dwells (held by back-pressure in the withdraw line)
+// and is finally pumped out at a set flow rate, leaving a Bretherton film whose thickness
+// follows the local meniscus speed Q/A(s).
+STAGES.fill = {
+  setup(ctx, st) {
+    const { geo, fs } = ctx;
+    if (geo.surface !== 'inner') {
+      ctx.warnings.push('Fill & withdraw acts on bores: select the inside surface to see its effect.');
+      return { duration: 0.01 };
+    }
+    if (ctx.trapped || ctx.plug) { for (let k = 0; k < geo.N; k++) if (fs.mask[k] === 1) fs.mask[k] = 0; ctx.trapped = null; ctx.plug = null; }
+    const fromStart = st.fillFrom !== 'end';
+    // fill level: the liquid surface position (0 = completely full)
+    const lvl = Math.min(Math.max(st.fillLevelMm || 0, 0) * 1e-3, geo.L * 0.95);
+    const top = fromStart ? lvl : geo.L - lvl;
+    const V = fromStart ? ctx.cumA(geo.L) - ctx.cumA(top) : ctx.cumA(top);
+    const fillT = (V * 1e9) / Math.max(st.fillUlS, 1e-6);
+    const wdT = (V * 1e9) / Math.max(st.withdrawUlS, 1e-6);
+    ctx._fill = { fromStart, top, V, primeT: st.primeS || 0, fillT, wdT, phase: 'prime', plug: null };
+    fs.stats.deposited += V + (st.primeS || 0) * st.fillUlS * 1e-9; // primed liquid passes through
+    fs.stats.dripped += (st.primeS || 0) * st.fillUlS * 1e-9;
+    return { duration: ctx._fill.primeT + fillT + st.dwellS + wdT * 3 + (st.airTime || 0), dynamic: true };
+  },
+  hook(ctx, st, tl) {
+    const { geo, fs } = ctx;
+    const F = ctx._fill;
+    const tFill0 = F.primeT, tDwell0 = tFill0 + F.fillT, tWd0 = tDwell0 + st.dwellS;
+    const markFilled = (sLiquid) => {
+      // cells under liquid are held full; everything they cover is wetted
+      for (let i = 0; i < geo.Ni; i++) {
+        const under = F.fromStart ? geo.s[i] >= sLiquid : geo.s[i] <= sLiquid;
+        for (let j = 0; j < geo.Nj; j++) {
+          const k = i * geo.Nj + j;
+          if (fs.mask[k] === 2) continue;
+          if (under) { fs.mask[k] = 1; fs.hFix[k] = Math.max(fs.hp * 8, 0.02 * geo.rHyd[i]); fs.h[k] = fs.hFix[k]; fs.m[k] = fs.h[k] * ctx.coat.solids; fs.alpha[k] = 0; fs.wetted[k] = 1; }
+          else if (fs.mask[k] === 1) fs.mask[k] = 0;
+        }
+      }
+    };
+    if (tl < tFill0) {
+      // priming: coating streams through the whole bore into the withdraw line
+      F.phase = 'prime';
+      markFilled(F.fromStart ? 0 : geo.L);
+      ctx.aux = { nozzle: F.fromStart ? 0.5e-3 : geo.L - 0.5e-3, filling: 1 };
+      return;
+    }
+    if (tl < tDwell0) {
+      // withdraw pump stopped: the bore fills from the far end up to the fill level
+      F.phase = 'fill';
+      const frac = (tl - tFill0) / Math.max(F.fillT, 1e-9);
+      const target = F.fromStart ? ctx.cumA(geo.L) - frac * F.V : frac * F.V;
+      const sLiq = Math.max(0, Math.min(geo.L, ctx.invCumA(target)));
+      markFilled(sLiq);
+      ctx.aux = { nozzle: F.fromStart ? 0.5e-3 : geo.L - 0.5e-3, meniscus: sLiq, filling: 1 };
+      return;
+    }
+    if (tl < tWd0) {
+      F.phase = 'dwell';
+      markFilled(F.top);
+      ctx.aux = { meniscus: F.top, filling: 1 };
+      return;
+    }
+    // withdraw: positive-displacement pump empties the bore out of the far opening
+    if (!F.plug) {
+      F.phase = 'withdraw';
+      F.plug = new Plug(ctx, F.top, F.fromStart ? 1 : -1, F.V);
+      F.plug.flowQ = st.withdrawUlS * 1e-9;
+      F.plug.maxSpeed = 0;
+      for (let k = 0; k < geo.N; k++) if (fs.mask[k] === 1) fs.mask[k] = 0;
+    }
+    const plug = F.plug;
+    if (!plug.done) {
+      const before = plug.exited;
+      plugStep(ctx, plug, fs.dt, () => 1);
+      fs.stats.dripped += Math.max(0, plug.exited - before);
+      ctx.aux = { meniscus: plug.rear, speed: plug.speed, filling: 1 };
+      if (plug.done) { fs.stats.dripped += Math.max(0, plug.V); F.tDone = tl; }
+      return;
+    }
+    if (F.tDone === undefined) F.tDone = tl;
+    F.phase = 'done';
+    ctx.aux = {};
+    if (tl - F.tDone >= (st.airTime || 0)) ctx._stageDone = true;
+  },
+  dtMax(ctx) {
+    const F = ctx._fill;
+    if (F && F.plug && !F.plug.done) return Math.max((ctx.geo.ds / Math.max(F.plug.speed, 1e-5)) * 0.5, 1e-4);
+    return 0.5;
+  },
+};
 
 STAGES.vacuum = {
   setup(ctx, st) {

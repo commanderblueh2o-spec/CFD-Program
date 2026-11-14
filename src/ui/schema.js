@@ -119,6 +119,20 @@ export const STAGE_SCHEMAS = {
       ...env,
     ],
   },
+  fill: {
+    name: 'Fill, dwell & withdraw (pumps)', color: 4,
+    help: 'The inserter pumps coating into one opening while a withdraw pump on the other opening pulls it through (priming). The withdraw pump stops, the bore fills and the coating dwells, held by back-pressure in the withdraw line; then it is pumped out. The receding meniscus leaves a film that is thicker where it moves faster (narrow sections).',
+    fields: [
+      f('dwellS', 'Dwell (cartridge full)', 's', 0, 600, 1, 'Time the coating sits in the full cartridge.', { main: true, sl: [0, 120, 'lin'] }),
+      f('withdrawUlS', 'Withdraw pump rate', 'µL/s', 0.1, 500, 0.1, 'Sets the meniscus speed (rate ÷ local cross-section): faster = thicker film.', { main: true, sl: [1, 100, 'log'] }),
+      f('fillUlS', 'Fill pump rate', 'µL/s', 0.1, 500, 0.1, '', { main: true, sl: [1, 100, 'log'] }),
+      f('primeS', 'Prime (flow-through) time', 's', 0, 300, 1, 'Withdraw pump running while the inserter fills.', { main: true, sl: [0, 30, 'lin'] }),
+      sel('fillFrom', 'Coating enters at', [['start', 'Start (s = 0, proximal)'], ['end', 'End (s = L)']], ''),
+      f('fillLevelMm', 'Liquid level below the opening', 'mm', 0, 100, 0.5, '0 = filled to the brim.'),
+      f('airTime', 'Hold after emptying', 's', 0, 600, 1, ''),
+      ...env,
+    ],
+  },
   vacuum: {
     name: 'Vacuum withdraw', color: 4,
     help: 'Bore filled with coating, then a regulated vacuum pulls the liquid out. Slower meniscus = thinner film.',

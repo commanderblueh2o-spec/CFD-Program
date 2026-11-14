@@ -25,7 +25,7 @@ await page.waitForFunction(() => document.querySelector('#run').disabled === fal
 console.log('run finished in', ((Date.now() - t0) / 1000).toFixed(1), 's');
 // let the animation play a moment, then capture three moments of the process
 await page.waitForTimeout(1500);
-for (const [n, frac] of [[1, 0.3], [2, 0.6], [3, 1]]) {
+for (const [n, frac] of [[1, 0.22], [2, 0.3], [3, 0.6], [4, 1]]) {
   await page.evaluate((f) => { const el = document.querySelector('#frame'); el.value = Math.round(el.max * f); el.dispatchEvent(new Event('input')); }, frac);
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${out}/1-anim-${n}.png` });

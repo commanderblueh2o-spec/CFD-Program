@@ -8,13 +8,13 @@ export const IOL_CARTRIDGE = {
 export const PRESETS = [
   {
     id: 'saiccs_ha_heated',
-    name: 'SAICCS — HA: plasma → pump dispense → HACS (heated air 30 SCFH @ 60 °C + bevel blow-off)',
-    description: 'Stationary vertical cartridge, wide proximal end up. Plasma treats the bore, the inserter nozzle pumps HA coating into the proximal end (peristaltic pump), it runs down the bore, then in HACS heated air blows down through the cartridge to dry and crosslink it while horizontal nozzles aligned with the tip bevel blow out the excess.',
+    name: 'SAICCS — HA: plasma → fill, dwell & withdraw → HACS heated air (30 SCFH @ 60 °C) + bevel blow-off',
+    description: 'Stationary vertical cartridge, wide proximal end up. After plasma, the inserter nozzle pumps HA coating into the proximal end while the withdraw pump on the tip pulls it through; the withdraw pump stops, the cartridge fills and dwells ~30 s, then the coating is withdrawn through the tip. HACS heated air then dries and crosslinks the film while horizontal nozzles aligned with the bevel blow out the excess.',
     geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'ha_thermal',
     grid: { ns: 120, nphi: 32 }, heatUpSeconds: 25,
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
-      { type: 'drip', label: 'Pump dispense (proximal end)', mode: 'pump', startMm: 1.5, pumpUlS: 5, pumpVolumeUl: 12, lines: 1, tilt: 0, drainAfter: 20 },
+      { type: 'fill', label: 'Fill, dwell & withdraw', fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, airTime: 2, tilt: 0 },
       { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tilt: 0 },
       { type: 'dwell', label: 'Cool down', duration: 60, tilt: 0 },
     ],
@@ -22,15 +22,28 @@ export const PRESETS = [
   },
   {
     id: 'saiccs_ha_oven',
-    name: 'IOL cartridge — HA: pump dispense → bevel blow-off → stationary oven cure',
-    description: 'Same dispense, ambient-air blow-off at the bevel, then the cartridge cures standing still in an 80 °C oven (the part heats up with a thermal lag).',
+    name: 'IOL cartridge — HA: fill, dwell & withdraw → bevel blow-off → stationary oven cure',
+    description: 'Same fill/dwell/withdraw insertion, ambient-air purge with bevel blow-off, then the cartridge cures standing still in an 80 °C oven (the part heats up with a thermal lag).',
     geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'ha_thermal',
     grid: { ns: 120, nphi: 32 }, heatUpSeconds: 40,
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
-      { type: 'drip', label: 'Pump dispense (proximal end)', mode: 'pump', startMm: 1.5, pumpUlS: 5, pumpVolumeUl: 12, lines: 1, tilt: 0, drainAfter: 20 },
+      { type: 'fill', label: 'Fill, dwell & withdraw', fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, airTime: 2, tilt: 0 },
       { type: 'airflow', label: 'Air purge + bevel blow-off', duration: 30, airFlowScfh: 30, airTempC: 25, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
       { type: 'cure', label: 'Oven cure 80 °C', mode: 'thermal', duration: 900, tempC: 80, tilt: 0, ambientAir: 0.5 },
+    ],
+    metrics: { zone: [1, 34] },
+  },
+  {
+    id: 'saiccs_ha_stream',
+    name: 'SAICCS — HA: single pumped stream (no withdraw pump) → HACS — for comparison',
+    description: 'What happens without the fill/dwell/withdraw step: the coating is pumped into the proximal end and simply runs down one side of the bore before HACS.',
+    geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'ha_thermal',
+    grid: { ns: 120, nphi: 32 }, heatUpSeconds: 25,
+    stages: [
+      { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
+      { type: 'drip', label: 'Pump dispense (proximal end)', mode: 'pump', startMm: 1.5, pumpUlS: 5, pumpVolumeUl: 12, lines: 1, tilt: 0, drainAfter: 20 },
+      { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
     ],
     metrics: { zone: [1, 34] },
   },

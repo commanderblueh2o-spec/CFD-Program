@@ -218,4 +218,20 @@ test('blow-off jets aligned with the bevel spare the bevel-face film; misaligned
   return `bevel-zone film ${a.metrics.wet.mean.toFixed(1)} µm aligned vs ${b.metrics.wet.mean.toFixed(1)} µm at 40° misalignment`;
 });
 
+test('fill, dwell & withdraw: pump-set meniscus speed gives the Bretherton film everywhere', () => {
+  const Q = 10; // µL/s
+  const spec = {
+    geometry: { type: 'catheter', length: 30, od: 3, id: 2 }, surface: 'inner', substrate: 'glass', coating: 'silicone_oil_350', coatingOverrides: oil,
+    grid: { ns: 60, nphi: 16 },
+    stages: [{ type: 'fill', fillFrom: 'start', primeS: 2, fillUlS: 20, dwellS: 5, withdrawUlS: Q, airTime: 0, tilt: 0 }],
+    metrics: { zone: [3, 27] },
+  };
+  const r = simulate(spec);
+  const A = Math.PI * 1e-6, U = (Q * 1e-9) / A;
+  const hB = brethertonFilm(1e-3, 0.1, U, (COATINGS.silicone_oil_350.d + COATINGS.silicone_oil_350.p) * 1e-3);
+  assert(r.metrics.coverage > 0.999, 'whole bore should be coated');
+  near(r.metrics.wet.mean * 1e-6, hB, 0.12, 'film thickness');
+  return `meniscus ${(U * 1e3).toFixed(2)} mm/s → film ${r.metrics.wet.mean.toFixed(1)} µm vs Bretherton ${(hB * 1e6).toFixed(1)} µm, coverage 100%`;
+});
+
 run();

@@ -45,6 +45,7 @@ Solids height *m = hφ* is advected with the liquid flux, using the upwind solid
 ## 4a. Bevelled tips, bridging and air pressure
 - **Bevel:** a cut plane at angle β from square removes cells whose axial position exceeds s_cut = L − (q_max − q)·tan β, where q is the coordinate across the tip toward the long side. Removed cells carry no liquid and have zero-flux faces. Liquid leaves at the last existing cell of each generator line, and the cross-jet acts within a set reach of the bevel edge.
 - **Bridging:** when the liquid at an axial station fills more than 45% of the cross-section (film ≳ 0.25 R), the thin-film description is replaced by a liquid plug holding that volume. The plug moves under gravity, air pressure and capillary pressures (Section 4), sweeps up film lying beyond its menisci, and leaves a Bretherton film capped at 0.2 R (thicker tube films are unstable and stay with the plug).
+- **Fill, dwell & withdraw:** the bore is held full (masked) through priming, filling and dwell. A positive-displacement withdraw pump then empties it at a fixed flow Q, so the receding meniscus moves at U = Q/A(s) independent of pressure. The film left is the Aussillous–Quéré thickness at that speed, capped at 0.2 R.
 - **Air jet from SCFH:** Q = SCFH × 7.866·10⁻⁶ m³/s × T_jet/293 K, U_jet = Q/(πd²/4). The flow entering the bore is the capture fraction × Q. A blocked bore feels the pressure capture × ½ρU_jet².
 - **Cross-jet misalignment:** a jet at angle ψ to the bevel face adds a shear of 4 τ_x sin ψ e^{−d/reach} toward the edge (τ_x = 0.0035 ρU²).
 

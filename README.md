@@ -8,6 +8,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 | **Dip coating** | Outer surface: Landau–Levich–Derjaguin / fibre entrainment. Lumen: filling with capillary rise, column drainage, Bretherton film behind the receding meniscus, and capillary hold-up of short columns. |
 | **Spray coating** | Traversing nozzle with a Gaussian footprint, incidence angle, part rotation, transfer efficiency and in-flight solvent loss. Lumen: radial-spray lance. |
 | **Drip / pump insertion** | A fixed inserter nozzle fed by a peristaltic pump (rate and volume), discrete drops, or a bead laid by a moving needle; several nozzles can be spaced around the bore. Liquid that collects in a narrowing bore bridges into a plug, which drains, is pushed out by air, or stays held by capillarity. |
+| **Fill, dwell & withdraw (pumps)** | SAICCS insertion. Coating is pumped into the proximal opening while a peristaltic withdraw pump on the tip pulls it through (priming). The withdraw pump stops, the cartridge fills and dwells (held by back-pressure), then it is pumped out. The pump fixes the flow, so the meniscus speed is Q/A(s): slow in the wide chamber, fast in the nozzle. That sets the Bretherton film along the bore. |
 | **Vacuum withdraw** | Lumen filled, then a regulated vacuum pulls the plug through or back out. Poiseuille plug dynamics with capillary pressures, Bretherton film versus meniscus speed, then air draw. |
 | **HACS airflow: heated down-draft and bevel blow-off** | Heated air set in SCFH (converted to jet velocity via the nozzle diameter, with the fraction entering the bore as a setting). The air cools along the bore through duct heat transfer, and the wall heats up with a thermal lag, which cures thermal coatings from the inside. Its pressure pushes liquid plugs out. Horizontal jets aligned with the tip bevel strip excess at the tip; a misalignment angle shows how off-axis jets also shear the coating on the bevel face. |
 | **Flash-off / dwell** | Levelling, drainage, sag and drying under a set temperature, tilt, rotation and air speed. |
@@ -38,7 +39,7 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 
 ## Verification
 
-`npm test` runs 22 checks against analytic results, including:
+`npm test` runs 23 checks against analytic results, including:
 
 - capillary levelling decay rate (linear theory, within 0.5%)
 - Jeffreys gravity drainage (within ~4%)
@@ -55,6 +56,7 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 - cross-jet blow-off, and bevel-aligned versus misaligned jets
 - bevel geometry mass conservation
 - plug formation in a narrow bore and clearing by air
+- fill/dwell/withdraw film versus Bretherton at the pump-set meniscus speed
 
 `npm run presets` runs every preset headlessly, and `npm run ui-test` drives the built app in headless Chromium.
 
