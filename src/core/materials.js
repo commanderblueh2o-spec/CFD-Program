@@ -37,6 +37,12 @@ export const COATINGS = {
     cure: { model: 'uv', kUV: 0.15, nUV: 1, alphaGel: 0.3 }, shrink: 0.05,
     note: 'Lubricious hydrophilic topcoat typical of catheters and IOL cartridges',
   },
+  ha_thermal: {
+    name: 'Hydrophilic HA (aqueous, thermal crosslink)', d: 26, p: 30, mu0: 0.3, rho: 1005, solids: 0.025, phiMax: 0.92,
+    evap0: 0.045, dHvap: 42, EaMu: 20, thick: 3.5,
+    cure: { model: 'thermal', A1: 1.4e7, Ea1: 70, A2: 0, Ea2: 70, m: 1, n: 1, alphaGel: 0.35 }, shrink: 0.1,
+    note: 'Hyaluronic-acid based lubricious coating, crosslinked by heat (~100–120 °C)',
+  },
   pvp_ipa: {
     name: 'Hydrophilic PVP (IPA, UV)', d: 19, p: 4, mu0: 0.02, rho: 830, solids: 0.05, phiMax: 0.95,
     evap0: 0.25, dHvap: 45, EaMu: 18, thick: 4,

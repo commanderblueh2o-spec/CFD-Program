@@ -9,23 +9,25 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><svg viewBox="0 0 32 32" width="22" height="22"><path d="M5 20c4-8 8 4 12-4s6-6 9-4" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/></svg><span>CoatSim</span><small>coating flow &amp; film formation</small></div>
-  <label class="preset-pick">Preset <select id="preset"></select></label>
+  <div class="brand"><svg viewBox="0 0 32 32" width="22" height="22"><path d="M5 20c4-8 8 4 12-4s6-6 9-4" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/></svg><span>CoatSim</span></div>
+  <select id="preset" class="preset" title="Start from a ready-made process"></select>
   <div class="spacer"></div>
   <div id="progress" class="progress" hidden><div class="bar"><i></i></div><span class="msg"></span></div>
-  <button id="run" class="btn primary" title="Run simulation (Ctrl+Enter)">Run simulation</button>
+  <label class="live" title="Re-run automatically (fast grid) whenever a setting changes"><input type="checkbox" id="live"> Live</label>
+  <button id="run" class="btn primary" title="Run simulation (Ctrl+Enter)">▶ Run</button>
   <button id="stop" class="btn" hidden>Stop</button>
   <div class="menu">
-    <button class="btn" id="menuBtn">File ▾</button>
+    <button class="btn" id="menuBtn" title="Save, load and export">☰</button>
     <div class="menu-list" id="menuList" hidden>
-      <button data-act="save">Save setup (.json)</button>
+      <button data-act="save">Save setup…</button>
       <button data-act="load">Load setup…</button>
       <button data-act="link">Copy shareable link</button>
       <hr>
-      <button data-act="results">Export results (.json)</button>
-      <button data-act="csv">Export final field (.csv)</button>
-      <button data-act="profile">Export axial profile (.csv)</button>
+      <button data-act="video">Record animation (.webm)</button>
       <button data-act="png">Save 3D image (.png)</button>
+      <button data-act="results">Export results (.json)</button>
+      <button data-act="csv">Export final film map (.csv)</button>
+      <button data-act="profile">Export thickness profile (.csv)</button>
       <hr>
       <button data-act="help">Help &amp; model notes</button>
     </div>
@@ -35,65 +37,69 @@
 
 <main class="layout">
   <aside class="panel setup" id="setup">
-    <section class="card" id="secPart"><h3>Part</h3><div id="geoForm"></div></section>
-    <section class="card" id="secMat"><h3>Materials &amp; wetting</h3><div id="matForm"></div></section>
-    <section class="card" id="secStages"><h3>Process sequence</h3><div id="stageList"></div>
-      <div class="add-stage"><select id="addStageType"></select><button class="btn small" id="addStage">+ Add stage</button></div>
+    <section class="card"><h3><span class="n">1</span>Part</h3><div id="geoForm"></div></section>
+    <section class="card"><h3><span class="n">2</span>Coating</h3><div id="matForm"></div></section>
+    <section class="card"><h3><span class="n">3</span>Process</h3><div id="stageList"></div>
+      <div class="add-stage"><select id="addStageType"></select><button class="btn small" id="addStage">+ Add</button></div>
     </section>
-    <section class="card" id="secEval"><h3>Evaluation &amp; numerics</h3><div id="evalForm"></div></section>
+    <details class="card adv-card"><summary><h3>Advanced</h3></summary><div id="advForm"></div></details>
   </aside>
 
   <section class="center">
     <nav class="tabs" id="tabs">
-      <button data-tab="v3d" class="active">3D view</button>
-      <button data-tab="map">Unwrapped map</button>
-      <button data-tab="prof">Profiles</button>
-      <button data-tab="hist">Time history</button>
-      <button data-tab="sweep">Parameter sweep</button>
+      <button data-tab="v3d" class="active">Animation</button>
+      <button data-tab="map">Surface map</button>
+      <button data-tab="charts">Charts</button>
+      <button data-tab="sweep">Compare settings</button>
     </nav>
     <div class="viewbar" id="viewbar">
-      <label>Field <select id="field"></select></label>
-      <label>Colour <select id="cmap"></select></label>
-      <label class="v3only">Film exaggeration <input type="range" id="exag" min="0" max="100" value="0"></label>
-      <label class="v3only">Radius <select id="radial"><option value="auto">Auto scale</option><option value="1">True scale</option></select></label>
-      <label class="v3only chk"><input type="checkbox" id="cutaway" checked> Cutaway</label>
-      <button class="btn small v3only" id="resetView">Reset view</button>
+      <label>Show <select id="field"></select></label>
+      <label class="v3only" title="Exaggerate film thickness in 3D">Film relief <input type="range" id="exag" min="0" max="100" value="45"></label>
+      <label class="v3only chk" title="Cut the part open to see inside the bore"><input type="checkbox" id="cutaway" checked> Cut open</label>
+      <div class="menu v3only">
+        <button class="btn small" id="viewOpts" title="View options">⚙</button>
+        <div class="menu-list view-panel" id="viewPanel" hidden>
+          <label>Colour scale <select id="cmap"></select></label>
+          <label>Radius <select id="radial"><option value="auto">Auto-scale slender parts</option><option value="1">True scale</option></select></label>
+          <button class="btn small" id="resetView">Reset camera</button>
+          <div class="hint">Drag to rotate · right-drag to pan · wheel to zoom</div>
+        </div>
+      </div>
       <div class="spacer"></div>
-      <div class="colorbar"><span id="cbLo">0</span><i id="cbGrad"></i><span id="cbHi">1</span><span id="cbUnit"></span></div>
+      <div class="legend" id="legend"></div>
     </div>
     <div class="views">
-      <div class="view active" id="v3d"><div class="overlay" id="ovl3d"></div><div class="empty" id="empty3d">Choose a preset or set up a part, then press <b>Run simulation</b>.</div></div>
+      <div class="view active" id="v3d"><div class="overlay" id="ovl3d"></div><div class="empty" id="empty3d">Pick a preset (top left), adjust the settings, then press <b>&nbsp;▶ Run</b>.</div></div>
       <div class="view" id="map"><div id="mapInner" style="height:100%"></div></div>
-      <div class="view grid2" id="prof"><div id="chAxial"></div><div id="chCirc"></div></div>
-      <div class="view grid2" id="hist"><div id="chThick"></div><div id="chCure"></div><div id="chVisc"></div><div id="chSolids"></div></div>
+      <div class="view grid-charts" id="charts"><div id="chAxial"></div><div id="chCirc"></div><div id="chThick"></div><div id="chCure"></div><div id="chTemp"></div><div id="chVisc"></div></div>
       <div class="view" id="sweep"><div id="sweepForm" class="sweep-form"></div><div class="grid3" id="sweepCharts"><div id="swA"></div><div id="swB"></div><div id="swC"></div></div><div id="sweepTable"></div></div>
     </div>
     <div class="timeline" id="timeline">
-      <button class="btn small" id="play" title="Play / pause (space)">▶</button>
-      <input type="range" id="frame" min="0" max="0" value="0">
+      <button class="btn small play" id="play" title="Play / pause (space)">▶</button>
+      <div class="tl-track"><div class="stagebar" id="stagebar"></div><input type="range" id="frame" min="0" max="0" value="0"></div>
+      <select id="speed" title="Playback speed"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
       <div class="tl-info" id="tlInfo">No results yet</div>
+      <button class="btn small rec" id="rec" title="Record the animation to a video file">● Rec</button>
     </div>
   </section>
 
-  <aside class="panel results" id="results">
-    <div class="empty small">Results appear here after a run.</div>
-  </aside>
+  <aside class="panel results" id="results"></aside>
 </main>
 
 <dialog id="help">
   <div class="help-body">
-    <h2>CoatSim — model notes</h2>
-    <p>CoatSim solves the <b>thin-film (lubrication) equations</b> on the coated surface of a catheter, tube, IOL cartridge or flat coupon. The film is assumed thin compared with the part's radius and gently sloped, which is the standard model for coating flows (drainage, levelling, wetting, sag and beading).</p>
+    <h2>CoatSim — how it works</h2>
+    <p><b>Quick start:</b> pick a preset, change settings on the left (tick <b>Live</b> to re-run automatically), press <b>▶ Run</b>, and watch the coating flow, dry and cure in the <b>Animation</b> tab. Colours: glossy blue = wet liquid (darker = thicker), sand = dried film, amber = cured, grey = bare.</p>
+    <p>CoatSim solves the <b>thin-film (lubrication) equations</b> on the coated surface of a catheter, tube, IOL cartridge or flat coupon, the standard model for coating flows (drainage, levelling, wetting, sag and beading).</p>
     <ul>
-      <li><b>Capillarity:</b> surface tension × surface curvature, including the cross-section curvature that drives Rayleigh–Plateau beading on wires and collar/plug formation in lumens.</li>
-      <li><b>Wetting:</b> equilibrium contact angle from Owens–Wendt surface-energy components (substrate vs coating), with Wenzel roughness and plasma activation/hydrophobic recovery. Enforced with a disjoining-pressure precursor-film model.</li>
-      <li><b>Gravity:</b> drainage along and around the part for any tilt and rotation speed.</li>
-      <li><b>Airflow:</b> interfacial shear and enhanced evaporation from air knives, HACS-style lumen airflow and vacuum air draw.</li>
-      <li><b>Film formation:</b> solvent evaporation (temperature and airflow dependent, slower deep inside lumens), solids build-up raising viscosity, and thermal (Arrhenius) or UV cure kinetics leading to gelation.</li>
-      <li><b>Deposition:</b> dip coating (Landau–Levich/fibre laws), vacuum withdraw and lumen draining (Bretherton/Aussillous–Quéré films behind moving menisci with Poiseuille plug dynamics and capillary pressure), spray (Gaussian footprint, incidence, rotation) and drip/needle insertion.</li>
+      <li><b>Wetting:</b> contact angle from surface energies of the part and coating, with plasma activation and hydrophobic recovery.</li>
+      <li><b>Gravity and capillarity:</b> drainage for any orientation; beading on thin wires and collars in bores.</li>
+      <li><b>Air:</b> heated down-draft through the bore (air cools along the bore; the wall heats up with a lag), horizontal blow-off jets, vacuum air draw.</li>
+      <li><b>Film formation:</b> solvent evaporation, solids build-up, thermal (oven or hot air) or UV crosslinking up to gelation.</li>
+      <li><b>Application:</b> dip, spray, needle/drip insertion (several beads possible), vacuum withdraw.</li>
     </ul>
-    <p><b>Limits.</b> Contact lines are resolved only down to the grid size; very thick puddles (comparable to the lumen radius) are approximate; material values are typical literature values. Calibrate the coating properties against a measured film before relying on absolute thicknesses. The tool is meant to compare options and explain trends quickly.</p>
-    <p><b>Controls.</b> 3D view: drag to rotate, right-drag or shift-drag to pan, wheel to zoom. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs, <kbd>Space</kbd> plays/pauses the timeline.</p>
+    <p><b>Limits.</b> Contact lines are resolved down to the grid size, puddles comparable to the bore size are approximate, and the material values are typical. Calibrate viscosity, solids and drying rate against one measured film before relying on absolute thickness. The tool is best for comparing options and seeing trends.</p>
+    <p><b>Controls.</b> 3D: drag to rotate, right-drag to pan, wheel to zoom. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs, <kbd>Space</kbd> plays/pauses. Click a stage in the timeline to jump to it.</p>
     <p class="muted">Version <span id="ver"></span> · <a href="https://github.com/commanderblueh2o-spec/CFD-Program" target="_blank" rel="noopener">source on GitHub</a></p>
     <form method="dialog"><button class="btn primary">Close</button></form>
   </div>

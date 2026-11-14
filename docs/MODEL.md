@@ -42,6 +42,11 @@ Solids height *m = hφ* is advected with the liquid flux, using the upwind solid
 - **Rotation:** gravity rotates in the body frame. It is resolved (Δt ≤ 0.25/ω) while the film can move a noticeable fraction of a cell per revolution, which captures rimming flow. Otherwise the rotation-averaged gravity is used.
 - **Drip-off:** an end cell held by capillarity is limited to 0.6 ℓ_c when gravity pulls outward. The excess is counted as dripped.
 
+## 4b. Heat
+Each cell carries a part temperature T_p that relaxes toward the local air temperature: dT_p/dt = (T_air − T_p)/τ, with τ the part heat-up time constant (default 30 s). Viscosity, evaporation and cure all use T_p.
+- **Oven or room:** T_air is the stage temperature.
+- **Heated down-draft into a bore:** T_air(x) = T_amb + (T_jet − T_amb) e^{−x/L_th}, with L_th = ṁc_p/(h·P). The heat-transfer coefficient h comes from Nu = 3.66 (laminar) or Dittus–Boelter (turbulent), and x is measured from the inlet.
+
 ## 5. Numerics
 - Finite volumes with metric face widths.
 - Delta-form, approximately factorised ADI: (I − ΔtJ_s)(I − ΔtJ_φ)δ = ΔtR(hⁿ). J contains the frozen-mobility fourth-order capillary operator, the positive part of the second-order disjoining and hydrostatic terms, and upwind-linearised gravity and shear advection. Lines are solved with pentadiagonal and cyclic-pentadiagonal (Sherman–Morrison–Woodbury) solvers.

@@ -10,7 +10,7 @@ self.onmessage = (e) => {
         onProgress: (f, msg) => { const now = Date.now(); if (now - last > 120) { last = now; self.postMessage({ type: 'progress', id, f, msg }); } },
       });
       const transfer = [];
-      for (const fr of res.frames) transfer.push(fr.h.buffer, fr.m.buffer, fr.alpha.buffer, fr.mask.buffer);
+      for (const fr of res.frames) transfer.push(fr.h.buffer, fr.m.buffer, fr.alpha.buffer, fr.mask.buffer, fr.T.buffer);
       self.postMessage({ type: 'result', id, result: res }, transfer);
     } catch (err) {
       self.postMessage({ type: 'error', id, message: err.message || String(err) });

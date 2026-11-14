@@ -9,13 +9,16 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 | **Spray coating** | Traversing nozzle with a Gaussian footprint, incidence angle, part rotation, transfer efficiency and in-flight solvent loss. Lumen: radial-spray lance. |
 | **Drip insertion** | Discrete drops or a continuous bead laid by a moving needle, landing at the lowest point inside or the top outside. |
 | **Vacuum withdraw** | Lumen filled, then a regulated vacuum pulls the plug through or back out. Poiseuille plug dynamics with capillary pressures, Bretherton film versus meniscus speed, then air draw. |
-| **Airflow (HACS)** | Horizontal air jet into the lumen. Nozzle speed, angle and height offset set the capture. Air accelerates through converging cartridges. Interfacial shear drives the film, evaporation increases, liquid blows off open ends, and the jet can clear trapped plugs. |
+| **Airflow: heated down-draft and blow-off** | Axial air jet into the bore, optionally heated. The air cools along the bore through duct heat transfer, and the wall heats up with a thermal lag, which cures thermal coatings from the inside. Horizontal cross-jets strip excess liquid at an opening. Shear drives the film, evaporation increases, and the jet can clear trapped plugs. |
 | **Flash-off / dwell** | Levelling, drainage, sag and drying under a set temperature, tilt, rotation and air speed. |
-| **Cure** | Thermal (Arrhenius / Kamal kinetics) or UV (dose-driven). Viscosity rises to gelation and freezes the film. |
+| **Cure** | Stationary thermal oven (the part heats up with a lag, then Arrhenius crosslinking) or UV (dose-driven). Viscosity rises to gelation and freezes the film. |
 
 **Run it:** open `docs/index.html` in any modern browser. It's a single self-contained file that works offline with nothing to install. You can also host it with GitHub Pages: Settings → Pages → Deploy from branch → `main` / `/docs`.
 
 ## What you get
+
+- **Animated process playback:** liquid is shown glossy blue (darker = thicker) and flows, then turns matte sand as it dries and amber as it cures. Air jets, the needle, the bath level and oven/UV glow are animated. Smooth interpolated playback at ½–4× speed, click a stage to jump to it, and record the animation to a video file.
+- **Sliders** for coating viscosity, surface tension, solids, drying rate and cure speed (time to 90% at 110 °C, activation energy, or UV dose), and for the main settings of each process stage. **Live** mode re-runs automatically on a fast grid.
 
 - **3D view** of the part coloured by dry or wet film thickness, solids fraction, cure or contact angle. It has a lumen cutaway, film-thickness exaggeration, process markers (bath level, applicator, meniscus), and playback through every stage.
 - **Unwrapped surface map** (axial position × circumferential angle) with hover readout.
@@ -27,7 +30,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 
 ## Geometries and materials
 
-Catheter or tube (optional tapered tip and ovality), IOL cartridge (loading chamber → taper → nozzle, elliptical sections), a custom axial profile, and a flat coupon. The substrate library covers PP, PC, PE, PTFE, FEP, Pebax, TPU, nylon, silicone, PVC, PEEK, stainless steel, nitinol and glass. The coating library covers hydrophilic PVP (aqueous and IPA, UV), silicone dispersion and oils, PTFE dispersion, PU solution, UV acrylate, heparin solution and water. Every property can be edited.
+Catheter or tube (optional tapered tip and ovality), IOL cartridge (loading chamber → taper → nozzle, elliptical sections), a custom axial profile, and a flat coupon. The substrate library covers PP, PC, PE, PTFE, FEP, Pebax, TPU, nylon, silicone, PVC, PEEK, stainless steel, nitinol and glass. The coating library covers hydrophilic HA (hyaluronic acid, aqueous, thermal crosslink), hydrophilic PVP (aqueous and IPA, UV), silicone dispersion and oils, PTFE dispersion, PU solution, UV acrylate, heparin solution and water. Every property can be edited.
 
 ## The physics in one paragraph
 
@@ -35,7 +38,7 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 
 ## Verification
 
-`npm test` runs 16 checks against analytic results, including:
+`npm test` runs 19 checks against analytic results, including:
 
 - capillary levelling decay rate (linear theory, within 0.5%)
 - Jeffreys gravity drainage (within ~4%)
@@ -47,6 +50,9 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 - capillary rise and hold-up in lumens, and clearing by air
 - plasma decay with depth
 - Rayleigh–Plateau beading on thin fibres
+- oven cure with part heat-up lag (integrated Arrhenius kinetics)
+- heated down-draft wall heating and cure gradient along the bore
+- cross-jet blow-off
 
 `npm run presets` runs every preset headlessly, and `npm run ui-test` drives the built app in headless Chromium.
 

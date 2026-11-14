@@ -1,7 +1,9 @@
 // Parameter schemas that drive the setup forms and the parameter sweep tool.
-// f(key, label, unit, min, max, step, help)
+// f(key, label, unit, min, max, step, help, extra)
+//  extra.key: shown as a main control (with a slider) rather than under "More settings"
+//  extra.sl: [lo, hi, 'log'|'lin'] slider range (defaults to min/max)
 const f = (key, label, unit, min, max, step, help, extra = {}) => ({ key, label, unit, min, max, step, help, ...extra });
-const sel = (key, label, options, help) => ({ key, label, options, help, kind: 'select' });
+const sel = (key, label, options, help, extra = {}) => ({ key, label, options, help, kind: 'select', ...extra });
 
 export const GEOMETRY_SCHEMAS = {
   catheter: {
@@ -22,7 +24,7 @@ export const GEOMETRY_SCHEMAS = {
       f('chamberLength', 'Loading chamber length', 'mm', 1, 40, 0.5, ''),
       f('chamberWidth', 'Chamber inner width', 'mm', 1, 12, 0.1, ''),
       f('chamberHeight', 'Chamber inner height', 'mm', 0.5, 12, 0.1, ''),
-      f('taperLength', 'Taper length', 'mm', 1, 40, 0.5, 'Converging section that folds/compresses the lens.'),
+      f('taperLength', 'Taper length', 'mm', 1, 40, 0.5, 'Converging section that folds the lens.'),
       f('nozzleWidth', 'Nozzle inner width', 'mm', 0.5, 6, 0.05, ''),
       f('nozzleHeight', 'Nozzle inner height', 'mm', 0.5, 6, 0.05, ''),
       f('nozzleLength', 'Nozzle length', 'mm', 1, 30, 0.5, ''),
@@ -46,125 +48,122 @@ export const GEOMETRY_SCHEMAS = {
 };
 
 const env = [
-  f('tempC', 'Temperature', '°C', -10, 250, 1, 'Part/air temperature during the stage.'),
   f('tilt', 'Axis tilt from vertical', '°', 0, 180, 1, '0 = vertical with s = 0 at the top; 90 = horizontal.'),
-  f('rpm', 'Part rotation', 'rpm', 0, 600, 1, 'Rotation about the part axis (averages gravity sag).'),
+  f('tempC', 'Room / oven temperature', '°C', -10, 250, 1, 'Air temperature around the part; the part follows it with the heat-up lag.'),
+  f('rpm', 'Part rotation', 'rpm', 0, 600, 1, 'Rotation about the part axis (0 = stationary).'),
   f('ambientAir', 'Ambient air speed', 'm/s', 0, 30, 0.1, 'Background air movement (evaporation).'),
 ];
 
 export const STAGE_SCHEMAS = {
   plasma: {
     name: 'Plasma activation', color: 7,
-    help: 'Atmospheric plasma raises the substrate polar surface energy (lower contact angle). Activation decays inside lumens with distance from the treated end and recovers with time (hydrophobic recovery).',
+    help: 'Atmospheric plasma raises the substrate polar surface energy (lower contact angle). Inside a bore the effect fades with distance from the treated opening and recovers over time.',
     fields: [
-      f('duration', 'Treatment time', 's', 1, 600, 1, '~20 s reaches saturation.'),
-      f('power', 'Relative power', '', 0, 1, 0.05, '0–1 relative activation.'),
-      f('penetrationMm', 'Lumen penetration length', 'mm', 0.5, 100, 0.5, 'Decay length of activation inside a lumen.'),
-      sel('fromEnd', 'Treated end(s)', [['both', 'Both ends'], ['start', 'Start (s = 0)'], ['end', 'End (s = L)']], 'Which opening the plasma plume enters.'),
-      f('holdMinutes', 'Hold before coating', 'min', 0, 10000, 1, 'Delay to coating: drives hydrophobic recovery.'),
+      f('duration', 'Treatment time', 's', 1, 600, 1, '~20 s reaches saturation.', { main: true, sl: [1, 60, 'lin'] }),
+      f('power', 'Relative power', '', 0, 1, 0.05, '0–1 relative activation.', { main: true }),
+      f('penetrationMm', 'Reach inside the bore', 'mm', 0.5, 100, 0.5, 'Decay length of activation inside a lumen.', { main: true, sl: [1, 40, 'lin'] }),
+      sel('fromEnd', 'Treated opening(s)', [['both', 'Both ends'], ['start', 'Start (s = 0)'], ['end', 'End (s = L)']], ''),
+      f('holdMinutes', 'Hold before coating', 'min', 0, 10000, 1, 'Delay to coating: hydrophobic recovery.'),
       ...env,
     ],
   },
   dip: {
     name: 'Dip coating', color: 1,
-    help: 'Part immersed bottom-first and withdrawn at constant speed. Outer: Landau–Levich–Derjaguin / fibre law. Lumen: fills (with capillary rise), then drains, leaving a Bretherton film.',
+    help: 'Part dipped bottom-first and withdrawn at constant speed. Faster withdrawal = thicker film (∝ speed^2/3).',
     fields: [
-      f('speed', 'Withdrawal speed', 'mm/s', 0.01, 100, 0.01, ''),
-      f('immersionMm', 'Immersion depth', 'mm', 0.5, 1e9, 0.5, 'Measured from the bottom end (large = whole part).'),
+      f('speed', 'Withdrawal speed', 'mm/s', 0.01, 100, 0.01, '', { main: true, sl: [0.05, 50, 'log'] }),
+      f('drainAfter', 'Drain time', 's', 0, 3600, 1, 'Time hanging after withdrawal.', { main: true, sl: [0, 300, 'lin'] }),
+      f('immersionMm', 'Immersion depth', 'mm', 0.5, 1e9, 0.5, 'From the bottom end (blank = whole part).'),
       f('dwell', 'Dwell in bath', 's', 0, 600, 1, ''),
-      f('drainAfter', 'Drain time after withdrawal', 's', 0, 3600, 1, ''),
       ...env,
     ],
   },
   spray: {
     name: 'Spray coating', color: 2,
-    help: 'Traversing nozzle with a Gaussian spray footprint. Outer: incidence-weighted deposition on the rotating part. Lumen: radial-spray lance moving along the axis.',
+    help: 'Traversing spray nozzle (outside) or radial spray lance (inside a bore).',
     fields: [
-      f('flowMlMin', 'Liquid flow rate', 'mL/min', 0.01, 100, 0.01, ''),
-      f('transferEff', 'Transfer efficiency', '', 0.05, 1, 0.01, 'Fraction of spray reaching the target plane (bounce, overspray).'),
+      f('flowMlMin', 'Liquid flow rate', 'mL/min', 0.01, 100, 0.01, '', { main: true, sl: [0.05, 20, 'log'] }),
+      f('passes', 'Passes', '', 1, 50, 1, '', { main: true, sl: [1, 20, 'lin'] }),
+      f('traverseMmS', 'Traverse speed', 'mm/s', 0.1, 500, 0.1, '', { main: true, sl: [1, 200, 'log'] }),
+      f('transferEff', 'Transfer efficiency', '', 0.05, 1, 0.01, ''),
       f('standoffMm', 'Standoff distance', 'mm', 2, 300, 1, ''),
       f('coneDeg', 'Spray cone angle', '°', 2, 120, 1, ''),
-      f('traverseMmS', 'Traverse speed', 'mm/s', 0.1, 500, 0.1, ''),
-      f('passes', 'Passes', '', 1, 50, 1, ''),
       f('startMm', 'Traverse start', 'mm', -100, 500, 0.5, ''),
       f('endMm', 'Traverse end', 'mm', -100, 1e9, 0.5, ''),
       f('clockDeg', 'Nozzle clock angle', '°', 0, 360, 1, '90 = from above (horizontal part).'),
       f('inFlightEvapPct', 'In-flight solvent loss', '%', 0, 90, 1, ''),
-      f('lanceSigmaMm', 'Lance spray width (lumen)', 'mm', 0.1, 20, 0.1, 'Axial footprint for inner spraying.'),
-      f('drainAfter', 'Settle time after spraying', 's', 0, 3600, 1, ''),
+      f('lanceSigmaMm', 'Lance spray width (bore)', 'mm', 0.1, 20, 0.1, ''),
+      f('drainAfter', 'Settle time', 's', 0, 3600, 1, ''),
       ...env,
     ],
   },
   drip: {
-    name: 'Drip insertion', color: 3,
-    help: 'Dispensing needle inside/at the part: discrete drops at positions between start and end, or a continuous bead laid while the needle travels.',
+    name: 'Drip / needle insertion', color: 3,
+    help: 'A dispensing needle lays drops or a continuous bead between the start and end positions. Several needles can be spaced around the bore.',
     fields: [
-      sel('mode', 'Mode', [['drops', 'Discrete drops'], ['bead', 'Continuous bead (needle travel)']], ''),
-      f('dropUl', 'Drop volume', 'µL', 0.05, 100, 0.05, ''),
-      f('count', 'Number of drops', '', 1, 50, 1, ''),
-      f('interval', 'Interval between drops', 's', 0.05, 120, 0.05, ''),
-      f('beadUlS', 'Bead dispense rate', 'µL/s', 0.01, 100, 0.01, ''),
-      f('needleMmS', 'Needle travel speed', 'mm/s', 0.1, 200, 0.1, ''),
+      sel('mode', 'Mode', [['bead', 'Continuous bead (needle travels)'], ['drops', 'Discrete drops']], '', { main: true }),
+      f('lines', 'Beads around the bore', '', 1, 12, 1, 'Number of needles / bead lines spaced evenly around the circumference.', { main: true, sl: [1, 8, 'lin'] }),
+      f('beadUlS', 'Dispense rate', 'µL/s', 0.01, 100, 0.01, '', { main: true, sl: [0.1, 20, 'log'], mode: 'bead' }),
+      f('needleMmS', 'Needle travel speed', 'mm/s', 0.1, 200, 0.1, '', { main: true, sl: [0.5, 50, 'log'], mode: 'bead' }),
+      f('dropUl', 'Drop volume', 'µL', 0.05, 100, 0.05, '', { main: true, sl: [0.2, 20, 'log'], mode: 'drops' }),
+      f('count', 'Number of drops', '', 1, 50, 1, '', { main: true, sl: [1, 12, 'lin'], mode: 'drops' }),
+      f('interval', 'Interval between drops', 's', 0.05, 120, 0.05, '', { mode: 'drops' }),
       f('startMm', 'Start position', 'mm', 0, 500, 0.5, ''),
       f('endMm', 'End position', 'mm', 0, 500, 0.5, ''),
-      f('clockDeg', 'Clock angle (blank = gravity)', '°', 0, 360, 1, 'Where drops land; blank = lowest point inside / top outside.', { optional: true }),
-      f('drainAfter', 'Spreading time after dispensing', 's', 0, 3600, 1, ''),
+      f('clockDeg', 'Clock angle (blank = gravity)', '°', 0, 360, 1, 'Where liquid lands; blank = lowest point inside / top outside.', { optional: true }),
+      f('drainAfter', 'Spreading time', 's', 0, 3600, 1, '', { main: true, sl: [0, 120, 'lin'] }),
       ...env,
     ],
   },
   vacuum: {
     name: 'Vacuum withdraw', color: 4,
-    help: 'Lumen filled with coating, then a regulated vacuum pulls the liquid plug out. The receding meniscus leaves a Bretherton film whose thickness grows with speed as Ca^(2/3); air then keeps flowing.',
+    help: 'Bore filled with coating, then a regulated vacuum pulls the liquid out. Slower meniscus = thinner film.',
     fields: [
-      f('pressureKpa', 'Vacuum (below ambient)', 'kPa', 0.01, 100, 0.01, ''),
-      f('fillLengthMm', 'Fill length', 'mm', 0.5, 1e9, 0.5, 'Lumen length initially filled (from the fill end).'),
+      f('pressureKpa', 'Vacuum (below ambient)', 'kPa', 0.01, 100, 0.01, '', { main: true, sl: [0.1, 80, 'log'] }),
+      f('maxSpeedMmS', 'Meniscus speed limit', 'mm/s', 0, 1000, 0.1, 'Flow restrictor / controller limit (0 = none).', { main: true, sl: [0, 50, 'lin'] }),
+      f('airTime', 'Air draw after clearing', 's', 0, 3600, 1, '', { main: true, sl: [0, 120, 'lin'] }),
+      f('fillLengthMm', 'Fill length', 'mm', 0.5, 1e9, 0.5, ''),
       sel('fromEnd', 'Fill end', [['start', 'Start (s = 0)'], ['end', 'End (s = L)']], ''),
       sel('direction', 'Withdraw', [['through', 'Through the far end'], ['back', 'Back out of the fill end']], ''),
-      f('maxSpeedMmS', 'Meniscus speed limit', 'mm/s', 0, 1000, 0.1, 'Flow restrictor / controller limit (0 = none).'),
-      f('airTime', 'Air draw after clearing', 's', 0, 3600, 1, ''),
       ...env,
     ],
   },
   airflow: {
-    name: 'Airflow (HACS)', color: 5,
-    help: 'Horizontal air jet aimed into the lumen (or along the outside). Interfacial shear drives the film downstream and evaporation increases. In a converging cartridge the air accelerates toward the nozzle.',
+    name: 'Airflow — heated down-draft / blow-off', color: 5,
+    help: 'Axial air jet into the bore (e.g. heated air blowing down to dry and cure the coating) and/or horizontal cross-jets that blow excess liquid off an opening.',
     fields: [
-      f('duration', 'Duration', 's', 0.5, 3600, 0.5, ''),
-      f('nozzleSpeed', 'Air nozzle exit speed', 'm/s', 0, 200, 0.5, ''),
-      f('angleDeg', 'Nozzle angle to axis', '°', 0, 89, 1, '0 = blowing straight down the axis.'),
-      f('offsetMm', 'Nozzle height offset', 'mm', 0, 20, 0.1, 'Offset of the jet from the lumen axis.'),
-      sel('fromEnd', 'Blowing from', [['start', 'Start (s = 0)'], ['end', 'End (s = L)']], ''),
+      f('duration', 'Duration', 's', 0.5, 7200, 0.5, '', { main: true, sl: [1, 1200, 'log'] }),
+      f('nozzleSpeed', 'Axial air speed', 'm/s', 0, 200, 0.5, '0 = no axial jet.', { main: true, sl: [0, 40, 'lin'] }),
+      f('airTempC', 'Air temperature', '°C', -10, 300, 1, 'Heated air cures thermal coatings inside the bore.', { main: true, sl: [20, 200, 'lin'] }),
+      f('crossJetSpeed', 'Horizontal blow-off jet', 'm/s', 0, 200, 0.5, 'Cross-jet over an opening that strips excess liquid (0 = off).', { main: true, sl: [0, 60, 'lin'] }),
+      sel('crossJetEnd', 'Blow-off at', [['end', 'End (s = L)'], ['start', 'Start (s = 0)'], ['none', 'None']], ''),
+      f('crossJetReachMm', 'Blow-off reach', 'mm', 0.2, 20, 0.1, 'How far from the opening the cross-jet acts.'),
+      sel('fromEnd', 'Axial jet enters at', [['start', 'Start (s = 0)'], ['end', 'End (s = L)']], ''),
+      f('angleDeg', 'Jet angle to axis', '°', 0, 89, 1, ''),
+      f('offsetMm', 'Jet offset from axis', 'mm', 0, 20, 0.1, ''),
       ...env,
     ],
   },
   dwell: {
     name: 'Flash-off / dwell', color: 6,
-    help: 'Rest period: the film levels, drains and dries under the set environment.',
-    fields: [f('duration', 'Duration', 's', 0.5, 36000, 1, ''), ...env],
+    help: 'Rest period: the film levels, drains and dries.',
+    fields: [f('duration', 'Duration', 's', 0.5, 36000, 1, '', { main: true, sl: [1, 1800, 'log'] }), ...env],
   },
   cure: {
-    name: 'Cure', color: 8,
-    help: 'Thermal oven (Arrhenius kinetics) or UV exposure (dose-driven). Viscosity rises toward gelation, freezing the film.',
+    name: 'Cure (oven / UV)', color: 8,
+    help: 'Thermal oven (part heats up with a lag, then Arrhenius crosslinking) or UV exposure.',
     fields: [
-      sel('mode', 'Cure mode', [['thermal', 'Thermal'], ['uv', 'UV']], 'Must match the coating chemistry to have an effect.'),
-      f('duration', 'Duration', 's', 1, 36000, 1, ''),
-      f('uvIntensity', 'UV intensity', 'mW/cm²', 0, 5000, 1, ''),
-      f('uvTransmission', 'UV transmission to lumen', '', 0, 1, 0.01, 'Fraction transmitted through the wall for inner surfaces.'),
-      ...env,
+      sel('mode', 'Cure mode', [['thermal', 'Thermal oven'], ['uv', 'UV']], 'Must match the coating chemistry.', { main: true }),
+      f('tempC', 'Oven temperature', '°C', -10, 300, 1, '', { main: true, sl: [25, 200, 'lin'] }),
+      f('duration', 'Duration', 's', 1, 36000, 1, '', { main: true, sl: [10, 3600, 'log'] }),
+      f('uvIntensity', 'UV intensity', 'mW/cm²', 0, 5000, 1, '', { main: true, sl: [5, 1000, 'log'], cure: 'uv' }),
+      f('uvTransmission', 'UV transmission into bore', '', 0, 1, 0.01, '', { cure: 'uv' }),
+      f('tilt', 'Axis tilt from vertical', '°', 0, 180, 1, ''),
+      f('rpm', 'Part rotation', 'rpm', 0, 600, 1, ''),
+      f('ambientAir', 'Oven air speed', 'm/s', 0, 30, 0.1, ''),
     ],
   },
 };
-
-export const COATING_OVERRIDES = [
-  f('mu0', 'Viscosity', 'Pa·s', 1e-4, 100, 1e-4, 'At 25 °C, as applied.'),
-  f('d', 'Surface tension – dispersive', 'mN/m', 5, 80, 0.1, ''),
-  f('p', 'Surface tension – polar', 'mN/m', 0, 60, 0.1, ''),
-  f('rho', 'Density', 'kg/m³', 600, 2500, 1, ''),
-  f('solids', 'Solids (volume fraction)', '', 0.001, 1, 0.001, ''),
-  f('evap0', 'Solvent evaporation rate', 'µm/s', 0, 10, 0.001, 'Flat film, still air, 25 °C.'),
-  f('thick', 'Thickening exponent', '', 0, 10, 0.1, 'How fast viscosity rises as solvent leaves.'),
-  f('shrink', 'Cure shrinkage', '', 0, 0.5, 0.01, ''),
-];
 
 export const SUBSTRATE_OVERRIDES = [
   f('d', 'Surface energy – dispersive', 'mN/m', 5, 80, 0.1, ''),
@@ -172,9 +171,11 @@ export const SUBSTRATE_OVERRIDES = [
 ];
 
 export const FIELDS = [
+  { key: 'state', label: 'Coating state (animation)', unit: '' },
   { key: 'dry', label: 'Dry film thickness', unit: 'µm' },
   { key: 'wet', label: 'Wet film thickness', unit: 'µm' },
-  { key: 'phi', label: 'Solids fraction', unit: '' },
   { key: 'alpha', label: 'Degree of cure', unit: '' },
+  { key: 'temp', label: 'Part temperature', unit: '°C' },
+  { key: 'phi', label: 'Solids fraction', unit: '' },
   { key: 'theta', label: 'Contact angle', unit: '°' },
 ];

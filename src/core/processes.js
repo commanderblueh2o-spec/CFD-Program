@@ -17,11 +17,11 @@ export const STAGE_DEFAULTS = {
   plasma: { duration: 20, power: 1.0, holdMinutes: 5, penetrationMm: 6, fromEnd: 'both', tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   dip: { speed: 2, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
   spray: { flowMlMin: 2, transferEff: 0.7, standoffMm: 40, coneDeg: 30, traverseMmS: 20, passes: 4, startMm: 0, endMm: 1e9, clockDeg: 90, inFlightEvapPct: 20, lanceSigmaMm: 2, tempC: 25, tilt: 90, rpm: 60, ambientAir: 0, drainAfter: 10 },
-  drip: { mode: 'drops', dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
+  drip: { mode: 'drops', lines: 1, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
   vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  airflow: { duration: 20, nozzleSpeed: 10, angleDeg: 0, offsetMm: 0, fromEnd: 'start', tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
+  airflow: { duration: 20, nozzleSpeed: 10, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 3, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   dwell: { duration: 60, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 90, rpm: 0, ambientAir: 0.3 },
+  cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 0, rpm: 0, ambientAir: 0.3 },
 };
 
 export function withDefaults(stage) { return { ...STAGE_DEFAULTS[stage.type], ...stage }; }
@@ -59,7 +59,7 @@ export function makeContext(spec) {
   const geo = buildGeometry(spec);
   const coat = resolveCoating(spec);
   const sub = resolveSubstrate(spec);
-  const fs = new FilmSolver(geo, coat, { precursor: (spec.precursorUm || 0.05) * 1e-6 });
+  const fs = new FilmSolver(geo, coat, { precursor: (spec.precursorUm || 0.05) * 1e-6, tauHeat: spec.heatUpSeconds || 30 });
   const ctx = { spec, geo, coat, sub, fs, act: new Float64Array(geo.N), holdHours: 0 };
   // cumulative cross-section area along the lumen (for plug kinematics)
   const { Ni, ds, crossArea } = geo;
@@ -115,6 +115,7 @@ function lumenEvapFactor(ctx, airInLumen) {
 function applyEnv(ctx, st, t0) {
   const fs = ctx.fs;
   fs.env.T = (st.tempC ?? 25) + 273.15;
+  if (!ctx._airTField) fs.Tair.fill(fs.env.T);
   const omega = ((st.rpm || 0) * 2 * Math.PI) / 60;
   fs.dtCap = 0;
   if (omega > 0) {
@@ -208,12 +209,13 @@ STAGES.airflow = {
     const tauS = new Float64Array(geo.N), tauP = new Float64Array(geo.N);
     const eff = Math.max(0, Math.cos((st.angleDeg * Math.PI) / 180));
     const dir = st.fromEnd === 'end' ? -1 : 1;
-    let airMax = 0;
+    let airMax = 0, Uin0 = 0;
     if (geo.surface === 'inner') {
       const i0 = dir > 0 ? 0 : geo.Ni - 1;
       const Rin = Math.sqrt(geo.A[i0] * geo.B[i0]);
       const capture = 0.7 * Math.exp(-Math.pow((st.offsetMm * 1e-3) / Rin, 2));
       const Uin = st.nozzleSpeed * eff * capture;
+      Uin0 = Uin;
       for (let i = 0; i < geo.Ni; i++) {
         const U = (Uin * geo.crossArea[i0]) / geo.crossArea[i]; // continuity: accelerates in a taper
         const tau = airShear(U, 2 * geo.rHyd[i]) * dir;
@@ -226,7 +228,38 @@ STAGES.airflow = {
       airMax = U;
       for (let k = 0; k < geo.N; k++) tauS[k] = 0.0035 * AIR_RHO * U * U * dir;
     }
-    ctx._air = { tauS, tauP, airMax, plug: null };
+    ctx._air = { tauS, tauP, airMax, plug: null, Uin0 };
+    // ---- heated air: local air temperature along the part
+    const Tamb = (st.tempC ?? 25) + 273.15;
+    const Tjet = (st.airTempC ?? st.tempC ?? 25) + 273.15;
+    ctx._airTField = true;
+    if (geo.surface === 'inner' && st.nozzleSpeed > 0) {
+      // the air cools as it gives heat to the wall: T = Tamb + (Tjet - Tamb) exp(-x / Lth),
+      // Lth = m_dot cp / (h P) with fully developed laminar (Nu = 3.66) or Dittus–Boelter h
+      const i0 = dir > 0 ? 0 : geo.Ni - 1;
+      const Q = ctx._air.Uin0 * geo.crossArea[i0];
+      let x = 0;
+      for (let ii = 0; ii < geo.Ni; ii++) {
+        const i = dir > 0 ? ii : geo.Ni - 1 - ii;
+        const D = 2 * geo.rHyd[i], U = Q / geo.crossArea[i];
+        const Re = (AIR_RHO * U * D) / AIR_MU;
+        const Nu = Re < 2300 ? 3.66 : 0.023 * Math.pow(Re, 0.8) * Math.pow(0.7, 0.4);
+        const hc = (Nu * 0.026) / D;
+        const Lth = (AIR_RHO * Q * 1005) / Math.max(hc * geo.perim[i], 1e-12);
+        const T = Tamb + (Tjet - Tamb) * Math.exp(-x / Math.max(Lth, 1e-9));
+        for (let j = 0; j < geo.Nj; j++) fs.Tair[i * geo.Nj + j] = T;
+        x += geo.ds;
+      }
+    } else {
+      fs.Tair.fill(st.nozzleSpeed > 0 ? Tjet : Tamb);
+    }
+    // ---- horizontal cross-jet across an opening: strips excess liquid near that end
+    fs.endStrip = null;
+    if ((st.crossJetSpeed || 0) > 0 && st.crossJetEnd && st.crossJetEnd !== 'none') {
+      const reach = Math.max((st.crossJetReachMm ?? 3) * 1e-3, geo.ds);
+      const tauX = 0.0035 * AIR_RHO * st.crossJetSpeed * st.crossJetSpeed;
+      fs.endStrip = { end: st.crossJetEnd, reach, lim: Math.max(2e-6, fs.gamma / (200 * Math.max(tauX, 1e-6))) };
+    }
     if (ctx.trapped && geo.surface === 'inner') {
       const i0 = dir > 0 ? 0 : geo.Ni - 1;
       const Rin = Math.sqrt(geo.A[i0] * geo.B[i0]);
@@ -336,8 +369,17 @@ STAGES.drip = {
     return ctx.geo.surface === 'inner' ? down : down + Math.PI; // lowest point inside, top outside
   },
   deposit(ctx, st, s0, V, rbOverride) {
+    const n = Math.max(1, Math.round(st.lines || 1));
+    if (n > 1 && !ctx.geo.flat) {
+      // several needles / beads spaced evenly around the bore
+      const a0 = this.clockAngle(ctx, st);
+      for (let q = 0; q < n; q++) this.depositAt(ctx, st, s0, V / n, rbOverride, a0 + (2 * Math.PI * q) / n);
+      return;
+    }
+    this.depositAt(ctx, st, s0, V, rbOverride, this.clockAngle(ctx, st));
+  },
+  depositAt(ctx, st, s0, V, rbOverride, ang) {
     const { geo, fs } = ctx;
-    const ang = this.clockAngle(ctx, st);
     const th = ctx.thetaMean || 0.5;
     const rb = Math.max(rbOverride || sphericalCapRadius(V, th), 1.5 * geo.ds);
     const sig = rb / 2;
@@ -397,7 +439,7 @@ function plugStep(ctx, plug, dt, drive) {
   const sf = plug.front();
   const lo = Math.min(plug.rear, sf), hi = Math.max(plug.rear, sf);
   const iR = ctx.iOf(plug.rear);
-  const mu = viscosity(coat, coat.solids, 0, fs.env.T);
+  const mu = viscosity(coat, coat.solids, 0, fs.Tf[ctx.iOf(plug.rear) * geo.Nj]);
   // viscous resistance of the plug
   let Rv = 0;
   for (let i = ctx.iOf(lo); i <= ctx.iOf(hi); i++) Rv += ellipseResistance(mu, geo.A[i], geo.B[i]) * geo.ds;
@@ -612,7 +654,7 @@ export function frameOf(ctx, stIndex, label) {
   return {
     t: fs.t, stage: stIndex, label,
     h: Float32Array.from(fs.h), m: Float32Array.from(fs.m), alpha: Float32Array.from(fs.alpha),
-    mask: Uint8Array.from(fs.mask), aux: { ...(ctx.aux || {}) },
+    mask: Uint8Array.from(fs.mask), T: Float32Array.from(fs.Tf), aux: { ...(ctx.aux || {}) },
   };
 }
 
@@ -624,7 +666,7 @@ export function simulate(spec, cb = {}) {
   const stages = (spec.stages || []).map(withDefaults);
   const frames = [], history = [];
   const stageInfo = [];
-  const framesPerStage = spec.framesPerStage || 24;
+  const framesPerStage = spec.framesPerStage || 36;
   const maxWall = (spec.maxWallSeconds || 600) * 1000;
   // expected stage durations (for progress); dynamic stages estimated
   const est = stages.map((s) => s.duration || (s.type === 'dip' ? (s.dwell + Math.min(s.immersionMm, 1e4) / s.speed + (s.drainAfter || 0)) : 20));
@@ -682,6 +724,7 @@ export function simulate(spec, cb = {}) {
     // unmask anything still held (e.g. bath cells after the stage)
     for (let k = 0; k < geo.N; k++) if (fs.mask[k] && !isTrappedCell(ctx, Math.floor(k / geo.Nj))) fs.mask[k] = 0;
     clearFields(fs);
+    ctx._airTField = false; fs.endStrip = null;
     frames.push(frameOf(ctx, si, (st.label || st.type) + ' (end)'));
     history.push(snapshotHistory(ctx, si));
     stageInfo.push({ type: st.type, label: st.label || st.type, tStart, tEnd: fs.t, aux: { ...(ctx.aux || {}) } });
@@ -698,6 +741,8 @@ export function simulate(spec, cb = {}) {
 
 const STOP = { stop: true };
 
+function meanT(fs) { let t = 0; for (const v of fs.Tf) t += v; return t / fs.Tf.length; }
+
 function snapshotHistory(ctx, si) {
   const { fs, geo, coat } = ctx;
   let A = 0, hw = 0, hd = 0, al = 0, muMax = 0, phiS = 0;
@@ -710,7 +755,7 @@ function snapshotHistory(ctx, si) {
   const inv = A > 0 ? 1 / A : 0;
   return {
     t: fs.t, stage: si, wet: hw * inv, dry: hd * inv, alpha: al * inv, phi: phiS * inv,
-    muMax, volume: fs.volume(), coveredArea: A, T: fs.env.T - 273.15, solidsMax: coat.phiMax,
+    muMax, volume: fs.volume(), coveredArea: A, T: fs.env.T - 273.15, Tpart: meanT(fs) - 273.15, solidsMax: coat.phiMax,
   };
 }
 

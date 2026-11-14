@@ -124,4 +124,52 @@ test('viscosity rises with solids and diverges at gelation', () => {
   assert(viscosity(c, c.solids, 0, 350) < m0, 'temperature thinning');
 });
 
+test('oven cure includes part heat-up lag (HA thermal crosslink)', () => {
+  const tau = 40, Toven = 110 + 273.15, dur = 600;
+  const spec = {
+    geometry: { type: 'coupon', length: 10, width: 10 }, substrate: 'glass', coating: 'ha_thermal', coatingOverrides: { evap0: 0 }, heatUpSeconds: tau,
+    grid: { ns: 20, nphi: 6 },
+    stages: [{ type: 'drip', mode: 'drops', dropUl: 1, count: 1, startMm: 5, endMm: 5, tilt: 90, drainAfter: 0.5 }, { type: 'cure', mode: 'thermal', duration: dur, tempC: 110, tilt: 90 }],
+  };
+  const r = simulate(spec);
+  const c = COATINGS.ha_thermal.cure;
+  // integrate k(T(t)) with T(t) = Toven - (Toven - 298.15) exp(-t/tau)
+  let I = 0; const n = 6000;
+  for (let q = 0; q < n; q++) { const t = (q + 0.5) * dur / n; const T = Toven - (Toven - 298.15) * Math.exp(-t / tau); I += c.A1 * Math.exp(-c.Ea1 * 1000 / (8.314 * T)) * dur / n; }
+  const expected = 1 - Math.exp(-I);
+  near(r.metrics.cureMean, expected, 0.03, 'degree of cure');
+  const noLag = 1 - Math.exp(-c.A1 * Math.exp(-c.Ea1 * 1000 / (8.314 * Toven)) * dur);
+  return `α = ${r.metrics.cureMean.toFixed(3)} vs ${expected.toFixed(3)} with lag (${noLag.toFixed(3)} if instant)`;
+});
+
+test('heated down-draft heats the lumen from the inlet and cures it', () => {
+  const spec = {
+    geometry: { type: 'catheter', length: 40, od: 3, id: 2 }, surface: 'inner', substrate: 'pp', coating: 'ha_thermal', heatUpSeconds: 20,
+    grid: { ns: 40, nphi: 12 },
+    stages: [{ type: 'drip', mode: 'bead', lines: 4, startMm: 38, endMm: 2, beadUlS: 2, needleMmS: 5, tilt: 0, drainAfter: 1 },
+             { type: 'airflow', duration: 300, nozzleSpeed: 6, airTempC: 120, fromEnd: 'start', tilt: 0 }],
+  };
+  const ctxT = [];
+  const r = simulate(spec, { onStepDebug: (fs) => { if (fs.t > 300) ctxT[0] = [fs.Tf[0], fs.Tf[fs.Tf.length - 1]]; } });
+  const [Tin, Tout] = ctxT[0];
+  assert(Tin > 380 && Tin <= 393.2, 'inlet wall should approach the jet temperature, got ' + (Tin - 273.15).toFixed(1));
+  assert(Tout < Tin, 'outlet cooler than inlet');
+  const fr = r.frames[r.frames.length - 1], Nj = 12;
+  const aIn = fr.alpha[2 * Nj], aOut = fr.alpha[37 * Nj];
+  assert(aIn > 0.6 && aIn > 3 * aOut, `cure should be high at the inlet and fall downstream (${aIn.toFixed(2)} vs ${aOut.toFixed(2)})`);
+  return `wall ${(Tin - 273.15).toFixed(0)} °C at inlet, ${(Tout - 273.15).toFixed(0)} °C at outlet; cure ${(aIn * 100).toFixed(0)}% → ${(aOut * 100).toFixed(0)}%`;
+});
+
+test('horizontal cross-jet strips excess liquid near the chosen opening', () => {
+  const mk = (jet) => ({
+    geometry: { type: 'catheter', length: 20, od: 4, id: 3 }, surface: 'inner', substrate: 'glass', coating: 'silicone_oil_350', coatingOverrides: oil,
+    grid: { ns: 40, nphi: 12 },
+    stages: [{ type: 'drip', mode: 'drops', dropUl: 4, count: 1, startMm: 19, endMm: 19, tilt: 90, drainAfter: 0.2 },
+             { type: 'airflow', duration: 2, nozzleSpeed: 0, crossJetSpeed: jet, crossJetEnd: 'end', crossJetReachMm: 3, tilt: 90 }],
+  });
+  const a = simulate(mk(0)), b = simulate(mk(30));
+  assert(b.metrics.massBalance.dripped_uL > a.metrics.massBalance.dripped_uL + 0.5, 'jet should remove liquid');
+  return `removed ${(b.metrics.massBalance.dripped_uL - a.metrics.massBalance.dripped_uL).toFixed(2)} µL of the 4 µL drop`;
+});
+
 run();

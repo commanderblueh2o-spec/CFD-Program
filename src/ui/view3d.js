@@ -5,11 +5,11 @@
 import { colorAt } from './colormap.js';
 
 const VS = `
-attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut;
-uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW;
-void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; }`;
+attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss;
+uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG;
+void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; gl_PointSize=3.0; }`;
 const FS = `
-precision mediump float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW;
+precision mediump float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG;
 uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat;
 void main(){
   if (uCut > 0.5 && vCut > 0.0) discard;
@@ -17,7 +17,7 @@ void main(){
   vec3 v = normalize(uEye - vW);
   vec3 l1 = normalize(vec3(0.4,0.9,0.6)); vec3 l2 = v;
   float d = 0.55 + 0.35*max(dot(n,l1),0.0) + 0.35*max(dot(n,l2),0.0);
-  vec3 h = normalize(l1+v); float sp = pow(max(dot(n,h),0.0),40.0)*0.25;
+  vec3 h = normalize(l1+v); float sp = pow(max(dot(n,h),0.0),40.0+60.0*vG)*(0.18+0.9*vG);
   vec3 c = uFlat > 0.5 ? vC : vC*d + sp;
   gl_FragColor = vec4(c, uAlpha);
 }`;
@@ -46,9 +46,9 @@ export class View3D {
     const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     this.prog = p;
     this.loc = {};
-    for (const a of ['aPos', 'aNrm', 'aCol', 'aCut']) this.loc[a] = gl.getAttribLocation(p, a);
+    for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss']) this.loc[a] = gl.getAttribLocation(p, a);
     for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat']) this.loc[u] = gl.getUniformLocation(p, u);
-    this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(),
+    this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       lpos: gl.createBuffer(), lcol: gl.createBuffer() };
     this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.pan = [0, 0];
@@ -68,7 +68,16 @@ export class View3D {
     new ResizeObserver(() => this.render()).observe(this.el);
   }
 
-  resetView() { this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.pan = [0, 0]; this.render(); }
+  resetView() { this.autoCamera(true); this.render(); }
+
+  // Default camera: look into the cut-open half (body +y side is removed by the cutaway).
+  autoCamera(force) {
+    if (!force && this._camTilt === this.tilt) return;
+    this._camTilt = this.tilt;
+    const vertical = this.tilt < 45 || this.tilt > 135;
+    if (vertical) { this.yaw = 1.05; this.pitch = 0.3; this.dist = 3.4; } else { this.yaw = -0.5; this.pitch = 0.55; this.dist = 2.7; }
+    this.pan = [0, 0];
+  }
 
   // geo: serialised geometry; ghost: wall radius offset for the context shell
   setGeometry(geo) {
@@ -91,6 +100,7 @@ export class View3D {
     // slender parts: optionally scale the radius so the part is visible
     this.radial = this.radialMode === 'auto' && !geo.flat ? Math.max(1, geo.L / 10 / (2 * rmax)) : 1;
     this.scale = 2.2 / Math.max(geo.L, 2 * rmax * this.radial * 1.2);
+    this._camTilt = undefined;
     this.rmax = rmax;
     // ghost shell (outer wall for lumen views, nothing otherwise)
     this.hasGhost = geo.surface === 'inner';
@@ -111,11 +121,11 @@ export class View3D {
 
   upload(name, arr) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW); }
 
-  // values: per cell scalar for colour; film: per cell thickness [m] for displacement
-  setField(values, range, cmap, film, markers = [], bare = null) {
+  // opts: {values, range, cmap, film (m), markers, bare (Uint8), rgb (Float32 3/cell, overrides cmap), gloss (0..1/cell)}
+  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null) {
     const geo = this.geo; if (!geo || !this.gl) return;
     const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols;
-    const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n);
+    const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n), gls = new Float32Array(n);
     const [lo, hi] = range;
     const ex = this.exag;
     for (let i = 0; i < Ni; i++) for (let jj = 0; jj < cols; jj++) {
@@ -123,35 +133,96 @@ export class View3D {
       const d = film && ex > 0 ? film[k] * ex : 0;
       for (let c = 0; c < 3; c++) { pos[3 * v + c] = (geo.pos[3 * k + c] + (c < 2 || geo.flat ? geo.nrm[3 * k + c] * d : 0)) * (c < 2 ? this.radial : 1); nrm[3 * v + c] = geo.nrm[3 * k + c]; }
       if (bare && bare[k]) { col[3 * v] = 0.50; col[3 * v + 1] = 0.52; col[3 * v + 2] = 0.56; }
+      else if (rgbOverride) { col[3 * v] = rgbOverride[3 * k]; col[3 * v + 1] = rgbOverride[3 * k + 1]; col[3 * v + 2] = rgbOverride[3 * k + 2]; }
       else {
         const rgb = colorAt(cmap, 0.2 + 0.8 * Math.max(0, Math.min(1, (values[k] - lo) / (hi - lo))));
         col[3 * v] = rgb[0] / 255; col[3 * v + 1] = rgb[1] / 255; col[3 * v + 2] = rgb[2] / 255;
       }
+      gls[v] = glossField && !(bare && bare[k]) ? glossField[k] : 0;
       cut[v] = geo.surface === 'inner' && geo.pos[3 * k + 1] > 1e-9 ? 1 : 0;
     }
-    this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut);
-    // marker rings
-    const lp = [], lc = [];
-    for (const m of markers) {
-      if (m.s === null || m.s === undefined || !isFinite(m.s)) continue;
-      const i = Math.max(0, Math.min(Ni - 1, Math.round(m.s / geo.ds - 0.5)));
-      const a = (geo.A[i] || 0) * 1.12 + 0.05e-3, b = geo.flat ? 0 : (geo.B[i] || 0) * 1.12 + 0.05e-3;
-      const segs = 48;
-      const rgb = m.rgb || [1, 1, 1];
-      for (let q = 0; q < segs; q++) {
-        for (const qq of [q, q + 1]) {
-          const t = (qq / segs) * 2 * Math.PI;
-          if (geo.flat) lp.push(-a + (2 * a * qq) / segs, 0.1e-3, m.s); else lp.push(a * Math.cos(t) * this.radial, b * Math.sin(t) * this.radial, m.s);
-          lc.push(...rgb);
-        }
-      }
-    }
-    this.nLines = lp.length / 3;
-    this.upload('lpos', new Float32Array(lp)); this.upload('lcol', new Float32Array(lc));
+    this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut); this.upload('gloss', gls);
+    this.markers = markers;
     this.render();
   }
 
+  // Animated process effects: [{kind:'air'|'cross'|'needle'|'spray'|'bath', ...}]
+  setEffects(effects) {
+    this.effects = effects || [];
+    const animated = this.effects.some((e) => e.kind === 'air' || e.kind === 'cross' || e.kind === 'spray');
+    if (animated && !this._loop) {
+      const tick = () => { if (!this._loop) return; this.render(); this._loop = requestAnimationFrame(tick); };
+      this._loop = requestAnimationFrame(tick);
+    } else if (!animated && this._loop) { cancelAnimationFrame(this._loop); this._loop = null; this.render(); }
+  }
+
+  ringAt(sPos, scale = 1.12) {
+    const geo = this.geo, i = Math.max(0, Math.min(geo.Ni - 1, Math.round(sPos / geo.ds - 0.5)));
+    return [(geo.A[i] || 0) * scale * this.radial, geo.flat ? 0 : (geo.B[i] || 0) * scale * this.radial, i];
+  }
+
+  // build line geometry for markers + effects (time-dependent)
+  buildLines(now) {
+    const geo = this.geo, lp = [], lc = [];
+    const seg = (a, b, rgb) => { lp.push(...a, ...b); lc.push(...rgb, ...rgb); };
+    for (const m of this.markers || []) {
+      if (m.s === null || m.s === undefined || !isFinite(m.s)) continue;
+      const [a, b] = this.ringAt(m.s), segs = 48, rgb = m.rgb || [1, 1, 1];
+      for (let q = 0; q < segs; q++) {
+        const p = (qq) => { const t = (qq / segs) * 2 * Math.PI; return geo.flat ? [-a + (2 * a * qq) / segs, 0.1e-3, m.s] : [a * Math.cos(t), b * Math.sin(t), m.s]; };
+        seg(p(q), p(q + 1), rgb);
+      }
+    }
+    const L = geo.L, t = now / 1000;
+    for (const e of this.effects || []) {
+      if (e.kind === 'air') {
+        // streaks travelling along the bore (or along the outside) in the flow direction
+        const n = 70, rgb = e.hot ? [1.0, 0.55, 0.2] : [0.75, 0.85, 1.0];
+        const speed = 0.35 * L * Math.min(3, 0.5 + e.speed / 8);
+        for (let q = 0; q < n; q++) {
+          const phase = (q * 0.6180339) % 1, ang = q * 2.399;
+          let sPos = ((phase * L + t * speed) % (L * 1.1)) - 0.05 * L;
+          if (e.dir < 0) sPos = L - sPos;
+          const [a, b] = this.ringAt(Math.max(0, Math.min(L, sPos)), geo.surface === 'inner' ? 0.55 * (0.3 + 0.7 * ((q * 0.37) % 1)) : 1.35);
+          const x = a * Math.cos(ang), y = b * Math.sin(ang), len = 0.06 * L * e.dir;
+          seg([x, y, sPos], [x, y, sPos + len], rgb);
+        }
+      } else if (e.kind === 'cross') {
+        const sPos = e.end === 'start' ? 0 : L;
+        const [a, b] = this.ringAt(sPos, 1);
+        const span = Math.max(a, b) * 3, n = 24, rgb = [0.75, 0.9, 1.0];
+        for (let q = 0; q < n; q++) {
+          const phase = ((q * 0.6180339) + t * 1.2) % 1;
+          const x = -span + 2 * span * phase, y = b * (-0.8 + 1.6 * ((q * 0.37) % 1));
+          const z = sPos + (e.end === 'start' ? -1 : 1) * (0.01 * L + 0.02 * L * ((q * 0.53) % 1));
+          seg([x, y, z], [x + 0.25 * span, y, z], rgb);
+        }
+      } else if (e.kind === 'needle') {
+        const from = e.fromEnd === 'end' ? L * 1.15 : -0.15 * L;
+        const [, b] = this.ringAt(e.s, 1);
+        const y = geo.surface === 'inner' ? -0.45 * b : 1.6 * b;
+        seg([0, y, from], [0, y, e.s], [0.85, 0.87, 0.9]);
+        seg([0, y, e.s], [0, y - 0.15 * Math.max(b, 0.0005), e.s], [0.3, 0.8, 1.0]);
+      } else if (e.kind === 'spray') {
+        const [a] = this.ringAt(e.s, 1), top = 3 * Math.max(a, 0.001) + 0.05 * L;
+        const n = 28, rgb = [0.55, 0.8, 1.0];
+        for (let q = 0; q < n; q++) {
+          const ph = ((q * 0.6180339) + t * 1.5) % 1, spread = (((q * 0.37) % 1) - 0.5) * 0.25 * L;
+          const y0 = top * (1 - ph), y1 = Math.max(a, top * (1 - ph - 0.12));
+          seg([0, y0, e.s + spread * ph], [0, y1, e.s + spread * (ph + 0.12)], rgb);
+        }
+      } else if (e.kind === 'bath') {
+        // liquid level plane edges around the part
+        const [a] = this.ringAt(e.s, 1), w = Math.max(3 * a, 0.08 * L), rgb = [0.3, 0.75, 1.0];
+        for (const yy of [-w, w]) seg([-w, yy, e.s], [w, yy, e.s], rgb);
+        for (const xx of [-w, w]) seg([xx, -w, e.s], [xx, w, e.s], rgb);
+      }
+    }
+    return { lp: new Float32Array(lp), lc: new Float32Array(lc) };
+  }
+
   modelMatrix() {
+    this.autoCamera(false);
     // body frame -> world: axis direction a = (sin b, -cos b, 0); body y -> (cos b, sin b, 0); body x -> z
     const b = (this.tilt * Math.PI) / 180, s = this.scale, L = this.geo.L;
     const ax = [Math.sin(b), -Math.cos(b), 0], ay = [Math.cos(b), Math.sin(b), 0], az = [0, 0, 1];
@@ -188,11 +259,15 @@ export class View3D {
     gl.uniform1f(this.loc.uCut, this.cutaway ? 1 : 0);
     const bindA = (name, loc, size) => { if (loc < 0) return; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
     // main surface
-    bindA('pos', this.loc.aPos, 3); bindA('nrm', this.loc.aNrm, 3); bindA('col', this.loc.aCol, 3); bindA('cut', this.loc.aCut, 1);
+    bindA('pos', this.loc.aPos, 3); bindA('nrm', this.loc.aNrm, 3); bindA('col', this.loc.aCol, 3); bindA('cut', this.loc.aCut, 1); bindA('gloss', this.loc.aGloss, 1);
     gl.uniform1f(this.loc.uAlpha, 1); gl.uniform1f(this.loc.uFlat, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
     // lines (no depth test so markers are always visible)
+    const lines = this.buildLines(performance.now());
+    this.upload('lpos', lines.lp); this.upload('lcol', lines.lc);
+    this.nLines = lines.lp.length / 3;
+    gl.disableVertexAttribArray(this.loc.aGloss); gl.vertexAttrib1f(this.loc.aGloss, 0);
     if (this.nLines) {
       gl.disable(gl.DEPTH_TEST);
       bindA('lpos', this.loc.aPos, 3); bindA('lcol', this.loc.aCol, 3);
@@ -206,6 +281,7 @@ export class View3D {
     if (this.hasGhost) {
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
       bindA('gpos', this.loc.aPos, 3); bindA('gnrm', this.loc.aNrm, 3); bindA('gcol', this.loc.aCol, 3); bindA('gcut', this.loc.aCut, 1);
+      gl.disableVertexAttribArray(this.loc.aGloss); gl.vertexAttrib1f(this.loc.aGloss, 0);
       gl.uniform1f(this.loc.uAlpha, 0.18); gl.uniform1f(this.loc.uFlat, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
       gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);

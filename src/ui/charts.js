@@ -97,11 +97,14 @@ export class LineChart {
     if (this.ylabel) { g.save(); g.translate(11, T + (H - T - B) / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(this.ylabel, 0, 0); g.restore(); }
     // stage markers
     g.save();
+    let lastLabelEnd = -Infinity;
     for (const m of this.markers) {
       if (m.x < x0 || m.x > x1) continue;
       const xx = Math.round(px(m.x)) + 0.5;
       g.strokeStyle = grid; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, H - B); g.stroke();
-      g.setLineDash([]); g.fillStyle = muted; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(m.label, xx + 3, T + 1);
+      g.setLineDash([]);
+      const w = g.measureText(m.label).width;
+      if (xx + 3 > lastLabelEnd + 6 && xx + 3 + w < W - R) { g.fillStyle = muted; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(m.label, xx + 3, T + 1); lastLabelEnd = xx + 3 + w; }
     }
     g.restore();
     // bands then lines

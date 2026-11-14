@@ -102,7 +102,7 @@ export function computeMetrics(ctx, stages) {
   if (dryUm.mean <= 1e-6) add('high', 'No film formed', 'Nothing was deposited in the evaluation zone.', 'Check the stage sequence: the zone may not be reached by the applicator, or the surface (inner/outer) may not match the process.');
   if (coverage < 0.98 && dryUm.mean > 0) add(coverage < 0.85 ? 'high' : 'medium', 'Incomplete coverage', `${((1 - coverage) * 100).toFixed(1)}% of the zone is below ${(minDry * 1e6).toFixed(2)} µm dry.`, 'Lower the contact angle (plasma treat, add surfactant / lower-tension solvent), add liquid, or improve applicator reach.');
   if (dewetFrac > 0.005) add(dewetFrac > 0.05 ? 'high' : 'medium', 'Dewetting', `${(dewetFrac * 100).toFixed(1)}% of the wetted zone retracted to a bare surface.`, `Mean equilibrium contact angle is ${groups.contactAngleMean_deg.toFixed(0)}°. Plasma activation or a primer raises the substrate polar energy; faster drying freezes the film before it can retract.`);
-  if (dryUm.cov > 0.25 && dryUm.mean > 0) add(dryUm.cov > 0.5 ? 'high' : 'medium', 'Poor uniformity', `Coefficient of variation ${(dryUm.cov * 100).toFixed(0)}% (P5 ${dryUm.p5.toFixed(2)} µm, P95 ${dryUm.p95.toFixed(2)} µm).`, 'See axial / circumferential profiles to locate the cause.');
+  if (dryUm.cov > 0.25 && dryUm.mean > 0) add(dryUm.cov > 0.5 ? 'high' : 'medium', 'Poor uniformity', `Coefficient of variation ${(dryUm.cov * 100).toFixed(0)}% (P5 ${dryUm.p5.toFixed(2)} µm, P95 ${dryUm.p95.toFixed(2)} µm).`, 'The Charts tab shows whether the variation runs along the part or around it.');
   // axial gradient
   const am = axial.mean.filter((_, i) => geo.s[i] >= z0 && geo.s[i] <= z1);
   if (am.length > 6) {
@@ -119,7 +119,11 @@ export function computeMetrics(ctx, stages) {
   // circumferential sag
   if (!geo.flat && Nj >= 8) {
     const cm = circProfile.mean, mx = Math.max(...cm), mn = Math.min(...cm);
-    if (mn >= 0 && mx > 1.4 * Math.max(mn, 1e-9) && dryUm.mean > 0) add(mx > 2.5 * mn ? 'high' : 'medium', 'Circumferential sag', `Around the circumference the film varies ${mn.toFixed(2)}–${mx.toFixed(2)} µm.`, 'Gravity drains the film toward the low side of a horizontal part: rotate the part (rpm) until the film sets, or orient vertically.');
+    const horiz = stages.some((st) => ['dip', 'spray', 'drip', 'vacuum', 'dwell', 'airflow'].includes(st.type) && (st.tilt ?? 90) > 45 && (st.tilt ?? 90) < 135 && !(st.rpm > 0));
+    const fixC = horiz
+      ? 'Gravity drains the film toward the low side of a horizontal part: rotate it until the film sets, or hold it vertically.'
+      : 'Liquid stays near where it was applied (vertical, stationary part): add more bead lines / needles around the bore, lower the contact angle (plasma) or the viscosity so it spreads before it sets.';
+    if (mn >= 0 && mx > 1.4 * Math.max(mn, 1e-9) && dryUm.mean > 0) add(mx > 2.5 * mn ? 'high' : 'medium', horiz ? 'Circumferential sag' : 'Uneven around the circumference', `Around the circumference the film varies ${mn.toFixed(2)}–${mx.toFixed(2)} µm.`, fixC);
   }
   // edge beads
   const endMean = (i) => axial.mean[i];

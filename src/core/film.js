@@ -36,6 +36,9 @@ export class FilmSolver {
     this.tauS = new Float64Array(N); this.tauP = new Float64Array(N); // interfacial shear [Pa]
     this.evapFac = new Float64Array(N).fill(1);
     this.env = { T: 298.15, airU: 0, uv: 0, g: [0, 0, 9.81] };
+    this.Tf = new Float64Array(N).fill(298.15);   // film/part temperature [K]
+    this.Tair = new Float64Array(N).fill(298.15); // local air temperature the part relaxes to [K]
+    this.tauHeat = opts.tauHeat || 30;            // thermal time constant of the part wall [s]
     // work arrays
     this.mu = new Float64Array(N); this.M = new Float64Array(N); this.p = new Float64Array(N);
     this.R = new Float64Array(N); this.Rm = new Float64Array(N); this.D = new Float64Array(N);
@@ -90,13 +93,13 @@ export class FilmSolver {
   _rates() {
     const geo = this.geo, { Ni, Nj, ds, w, area, kc, periodic } = geo;
     const h = this.h, m = this.m, mu = this.mu, M = this.M, p = this.p, R = this.R, Rm = this.Rm, D = this.D;
-    const c = this.coat, gam = this.gamma, rho = this.rho, hp = this.hp, T = this.env.T;
+    const c = this.coat, gam = this.gamma, rho = this.rho, hp = this.hp, Tf = this.Tf;
     const N = geo.N;
     let vmax = 0;
     this.uS.fill(0); this.uP.fill(0);
     for (let k = 0; k < N; k++) {
       const phi = m[k] / h[k];
-      mu[k] = viscosity(c, phi, this.alpha[k], T);
+      mu[k] = viscosity(c, phi, this.alpha[k], Tf[k]);
       M[k] = (h[k] * h[k] * h[k]) / (3 * mu[k]);
     }
     // pressure
@@ -316,9 +319,11 @@ export class FilmSolver {
     }
     this.stats.deposited += dep;
     // evaporation + cure (pointwise)
-    const T = this.env.T, airU = this.env.airU, uvI = this.env.uv;
+    const airU = this.env.airU, uvI = this.env.uv, Tf = this.Tf;
     let evap = 0;
-    const cenv = { T, uv: uvI };
+    // part/film temperature relaxes toward the local air temperature (thermal lag of the wall)
+    const relax = 1 - Math.exp(-dt / Math.max(this.tauHeat, 1e-6));
+    for (let k = 0; k < N; k++) Tf[k] += (this.Tair[k] - Tf[k]) * relax;
     const needEvap = c.evap0 > 0 && c.solids < c.phiMax;
     const ef = this.evapFac;
     for (let k = 0; k < N; k++) {
@@ -326,19 +331,20 @@ export class FilmSolver {
       if (h[k] > 4 * hp) this.wetted[k] = 1;
       if (needEvap && h[k] > 2 * hp) {
         const phi = m[k] / h[k];
-        const E = evaporationRate(c, phi, T, airU, ef[k]);
+        const E = evaporationRate(c, phi, Tf[k], airU, ef[k]);
         const floor = Math.max(hp, m[k] / c.phiMax);
         const dh = Math.min(E * dt, Math.max(0, h[k] - floor));
         h[k] -= dh; evap += dh * area[k];
       }
       if (c.cure && c.cure.model !== 'none' && h[k] > 2 * hp) {
         const uvk = this.uvFac ? uvI * this.uvFac[k] : uvI;
-        const a = this.alpha[k] + dt * cureRate(c, this.alpha[k], { T, uv: uvk });
+        const a = this.alpha[k] + dt * cureRate(c, this.alpha[k], { T: Tf[k], uv: uvk });
         this.alpha[k] = Math.min(1, a);
       }
     }
     this.stats.evaporated += evap;
     if (this.dripEnabled) this._dripOff();
+    if (this.endStrip) this._crossStrip();
     this.t += dt; this.stats.steps++;
     // step size adaptation
     const grow = rel < 0.25 * maxRel ? 1.5 : rel < 0.5 * maxRel ? 1.15 : 0.95;
@@ -360,7 +366,10 @@ export class FilmSolver {
         const tauOut = i === 0 ? -this.tauS[k] : this.tauS[k];
         // air blowing out of an open end strips liquid once drag beats capillary retention
         let lim = Infinity;
-        if (outward > 0.2 * 9.81 || this.gn[k] > 0) lim = hMax;
+        // a pendant drop at an open end detaches once it outgrows the capillary length,
+        // or (in a lumen) once it would bridge the bore
+        const hEnd = this.geo.surface === 'inner' ? Math.min(hMax, 0.45 * this.geo.rHyd[i]) : hMax;
+        if (outward > 0.2 * 9.81 || this.gn[k] > 0) lim = hEnd;
         if (tauOut > 0.05) lim = Math.min(lim, Math.max(5e-6, Math.min(hMax, this.gamma / (200 * tauOut))));
         if (!isFinite(lim)) continue;
         if (this.h[k] > lim) {
@@ -369,6 +378,23 @@ export class FilmSolver {
           this.stats.dripped += ex * area[k];
           this.h[k] = lim; this.m[k] = lim * frac;
         }
+      }
+    }
+  }
+
+  // Horizontal cross-jet across an opening strips liquid within `reach` of that end.
+  _crossStrip() {
+    const es = this.endStrip; if (!es) return;
+    const { Ni, Nj, s, L, area } = this.geo;
+    for (let i = 0; i < Ni; i++) {
+      const d = es.end === 'start' ? s[i] : L - s[i];
+      if (d > es.reach) continue;
+      for (let j = 0; j < Nj; j++) {
+        const k = i * Nj + j;
+        if (this.mask[k] || this.h[k] <= es.lim) continue;
+        const frac = this.m[k] / this.h[k];
+        this.stats.dripped += (this.h[k] - es.lim) * area[k];
+        this.h[k] = es.lim; this.m[k] = es.lim * frac;
       }
     }
   }
