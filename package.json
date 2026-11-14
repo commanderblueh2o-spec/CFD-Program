@@ -1,0 +1,14 @@
+{
+  "name": "coatsim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/core.test.mjs && node test/process.test.mjs",
+    "presets": "node tools/run-presets.mjs",
+    "ui-test": "node build.mjs && node tools/ui-test.mjs"
+  },
+  "description": "Thin-film CFD for exploring how liquid coatings wet, flow, dry and cure on catheters and IOL cartridges",
+  "license": "MIT"
+}
