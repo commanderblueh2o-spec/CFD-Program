@@ -221,7 +221,7 @@ function renderEval() {
   a.addEventListener('change', upd); b.addEventListener('change', upd);
   zi.append(a, el('span', { class: 'unit' }, '–'), b, el('span', { class: 'unit' }, 'mm'));
   z.append(zi); box.append(z);
-  box.append(numberRow({ key: 'minDryUm', label: 'Coverage threshold (dry)', unit: 'µm', min: 0, max: 1000, step: 0.01, optional: true, help: 'Areas thinner than this count as uncovered. Blank = 25% of the mean.' }, sp.metrics.minDryUm ?? null, (v) => { sp.metrics.minDryUm = v ?? undefined; changed(); }));
+  box.append(numberRow({ key: 'minDryUm', label: 'Coverage threshold (dry)', unit: 'µm', min: 0, max: 1000, step: 0.01, optional: true, help: 'Areas thinner than this count as uncovered. Blank = 25% of the median.' }, sp.metrics.minDryUm ?? null, (v) => { sp.metrics.minDryUm = v ?? undefined; changed(); }));
   const res = el('div', { class: 'row' }); res.append(el('label', { title: 'Grid cells along the axis × around the circumference.' }, 'Resolution'));
   const g = sp.grid || { ns: 120, nphi: 32 };
   const cur = g.ns <= 80 ? 'coarse' : g.ns >= 180 ? 'fine' : 'normal';

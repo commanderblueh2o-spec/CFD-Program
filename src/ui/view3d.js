@@ -16,7 +16,7 @@ void main(){
   vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;
   vec3 v = normalize(uEye - vW);
   vec3 l1 = normalize(vec3(0.4,0.9,0.6)); vec3 l2 = v;
-  float d = 0.35 + 0.4*max(dot(n,l1),0.0) + 0.35*max(dot(n,l2),0.0);
+  float d = 0.55 + 0.35*max(dot(n,l1),0.0) + 0.35*max(dot(n,l2),0.0);
   vec3 h = normalize(l1+v); float sp = pow(max(dot(n,h),0.0),40.0)*0.25;
   vec3 c = uFlat > 0.5 ? vC : vC*d + sp;
   gl_FragColor = vec4(c, uAlpha);
@@ -122,9 +122,9 @@ export class View3D {
       const j = jj % Nj, k = i * Nj + j, v = i * cols + jj;
       const d = film && ex > 0 ? film[k] * ex : 0;
       for (let c = 0; c < 3; c++) { pos[3 * v + c] = (geo.pos[3 * k + c] + (c < 2 || geo.flat ? geo.nrm[3 * k + c] * d : 0)) * (c < 2 ? this.radial : 1); nrm[3 * v + c] = geo.nrm[3 * k + c]; }
-      if (bare && bare[k]) { col[3 * v] = 0.40; col[3 * v + 1] = 0.42; col[3 * v + 2] = 0.46; }
+      if (bare && bare[k]) { col[3 * v] = 0.50; col[3 * v + 1] = 0.52; col[3 * v + 2] = 0.56; }
       else {
-        const rgb = colorAt(cmap, 0.12 + 0.88 * Math.max(0, Math.min(1, (values[k] - lo) / (hi - lo))));
+        const rgb = colorAt(cmap, 0.2 + 0.8 * Math.max(0, Math.min(1, (values[k] - lo) / (hi - lo))));
         col[3 * v] = rgb[0] / 255; col[3 * v + 1] = rgb[1] / 255; col[3 * v + 2] = rgb[2] / 255;
       }
       cut[v] = geo.surface === 'inner' && geo.pos[3 * k + 1] > 1e-9 ? 1 : 0;

@@ -9,14 +9,14 @@ export const PRESETS = [
   {
     id: 'saiccs_drip_air',
     name: 'IOL cartridge lumen — plasma → drip insertion → HACS airflow → UV',
-    description: 'SAICCS-style line: atmospheric plasma activates the PP lumen, a needle lays a bead of hydrophilic coating, horizontal airflow spreads and dries it, then UV cure.',
+    description: 'SAICCS-style line: atmospheric plasma activates the PP lumen, a needle lays a bead of hydrophilic coating, the cartridge spins under horizontal airflow to spread and dry it, then UV cure. A baseline to calibrate against real SAICCS settings.',
     geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'pvp_water',
     grid: { ns: 120, nphi: 32 },
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 8, fromEnd: 'both', holdMinutes: 2 },
-      { type: 'drip', label: 'Needle bead insertion', mode: 'bead', startMm: 2, endMm: 32, beadUlS: 1.5, needleMmS: 6, tilt: 90, drainAfter: 5 },
-      { type: 'airflow', label: 'HACS airflow', duration: 25, nozzleSpeed: 12, angleDeg: 10, offsetMm: 0.5, fromEnd: 'start', tilt: 90 },
-      { type: 'dwell', label: 'Flash-off', duration: 60, tilt: 90, ambientAir: 0.3 },
+      { type: 'drip', label: 'Needle bead insertion', mode: 'bead', startMm: 2, endMm: 32, beadUlS: 3, needleMmS: 6, tilt: 90, drainAfter: 2 },
+      { type: 'airflow', label: 'HACS airflow (rotating)', duration: 25, nozzleSpeed: 12, angleDeg: 10, offsetMm: 0.5, fromEnd: 'start', tilt: 90, rpm: 60 },
+      { type: 'dwell', label: 'Flash-off (rotating)', duration: 60, tilt: 90, rpm: 60, ambientAir: 0.3 },
       { type: 'cure', label: 'UV cure', mode: 'uv', duration: 30, uvIntensity: 100, uvTransmission: 0.6, tempC: 30, tilt: 90 },
     ],
     metrics: { zone: [1, 35] },
@@ -24,13 +24,13 @@ export const PRESETS = [
   {
     id: 'cartridge_vacuum',
     name: 'IOL cartridge lumen — vacuum withdraw + UV',
-    description: 'Lumen filled from the loading chamber and the plug pulled through the nozzle by a regulated vacuum, followed by air drying and UV cure.',
+    description: 'Lumen filled from the loading chamber and the plug pulled through the nozzle at a controlled 2 mm/s while the cartridge turns slowly, then air drying and UV cure.',
     geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'pvp_water',
     grid: { ns: 120, nphi: 32 },
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 8, fromEnd: 'both', holdMinutes: 2 },
-      { type: 'vacuum', label: 'Vacuum withdraw', pressureKpa: 3, fillLengthMm: 36, fromEnd: 'start', direction: 'through', maxSpeedMmS: 8, airTime: 20, tilt: 90 },
-      { type: 'dwell', label: 'Flash-off', duration: 60, tilt: 90 },
+      { type: 'vacuum', label: 'Vacuum withdraw', pressureKpa: 3, fillLengthMm: 36, fromEnd: 'start', direction: 'through', maxSpeedMmS: 2, airTime: 20, tilt: 90, rpm: 20 },
+      { type: 'dwell', label: 'Flash-off', duration: 60, tilt: 90, rpm: 20 },
       { type: 'cure', label: 'UV cure', mode: 'uv', duration: 30, uvIntensity: 100, uvTransmission: 0.6, tilt: 90 },
     ],
     metrics: { zone: [1, 35] },
@@ -44,7 +44,7 @@ export const PRESETS = [
     stages: [
       { type: 'drip', label: 'Drip insertion', mode: 'drops', dropUl: 3, count: 3, interval: 2, startMm: 4, endMm: 20, tilt: 90, drainAfter: 10 },
       { type: 'airflow', label: 'Airflow', duration: 20, nozzleSpeed: 8, fromEnd: 'start', tilt: 90 },
-      { type: 'cure', label: 'Oven cure', mode: 'thermal', duration: 600, tempC: 110, tilt: 90 },
+      { type: 'cure', label: 'Oven cure', mode: 'thermal', duration: 900, tempC: 135, tilt: 90 },
     ],
     metrics: { zone: [1, 35] },
   },
@@ -95,7 +95,7 @@ export const PRESETS = [
     stages: [
       { type: 'dip', label: 'Dip', speed: 15, dwell: 2, drainAfter: 10, tilt: 0 },
       { type: 'dwell', label: 'Flash-off', duration: 60, tilt: 0 },
-      { type: 'cure', label: 'Oven cure', mode: 'thermal', duration: 300, tempC: 120, tilt: 0 },
+      { type: 'cure', label: 'Oven cure', mode: 'thermal', duration: 600, tempC: 150, tilt: 0 },
     ],
     metrics: { zone: [1, 29] },
   },

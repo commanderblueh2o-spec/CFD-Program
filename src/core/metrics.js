@@ -54,7 +54,7 @@ export function computeMetrics(ctx, stages) {
   const toUm = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, k === 'cov' ? v : k === 'area' ? v * 1e6 : v * 1e6]));
   const dryUm = toUm(D), wetUm = toUm(W);
   dryUm.area = D.area * 1e6; // mm^2
-  const minDry = (spec.metrics?.minDryUm ?? Math.max(0.25 * dryUm.mean, 0.01)) * 1e-6;
+  const minDry = (spec.metrics?.minDryUm ?? Math.max(0.25 * (dryUm.p50 > 0 ? dryUm.p50 : dryUm.mean), 0.01)) * 1e-6;
   let covA = 0, dewetA = 0, Atot = 0, alphaMean = 0, filmA = 0;
   for (let n = 0; n < zv.length; n++) {
     const k = zv[n];

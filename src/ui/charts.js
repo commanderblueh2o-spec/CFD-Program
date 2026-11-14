@@ -77,7 +77,7 @@ export class LineChart {
     if (!(y1 > y0)) { y1 = y0 + 1; }
     if (!this.logY) y1 += (y1 - y0) * 0.06;
     if (!(x1 > x0)) x1 = x0 + 1;
-    const L = 52, R = 12, T = 8, B = 30;
+    const L = 52, R = 14, T = 8, B = this.xlabel ? 40 : 26;
     const px = (x) => L + ((x - x0) / (x1 - x0)) * (W - L - R);
     const py = (y) => T + (1 - (tf(y) - y0) / (y1 - y0)) * (H - T - B);
     g.font = '11px system-ui'; g.textBaseline = 'middle';
@@ -91,9 +91,9 @@ export class LineChart {
       g.fillText(this.logY ? (Math.abs(v) <= 3 ? fmt(Math.pow(10, v)) : '1e' + v) : fmt(v), L - 6, yy);
     }
     g.textAlign = 'center'; g.textBaseline = 'top';
-    for (const v of ticks(x0, x1, Math.max(3, Math.floor((W - L) / 80)))) g.fillText(fmt(v), px(v), H - B + 6);
+    for (const v of ticks(x0, x1, Math.max(3, Math.floor((W - L) / 80)))) { const xx = Math.min(Math.max(px(v), L + 10), W - R - 10); g.fillText(fmt(v), xx, H - B + 5); }
     g.fillStyle = text2;
-    if (this.xlabel) { g.textAlign = 'right'; g.fillText(this.xlabel, W - R, H - 13); }
+    if (this.xlabel) { g.textAlign = 'center'; g.fillText(this.xlabel, L + (W - L - R) / 2, H - 15); }
     if (this.ylabel) { g.save(); g.translate(11, T + (H - T - B) / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(this.ylabel, 0, 0); g.restore(); }
     // stage markers
     g.save();

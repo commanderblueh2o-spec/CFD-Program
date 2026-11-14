@@ -233,6 +233,7 @@ export class FilmSolver {
     const geo = this.geo, { Ni, Nj, ds, w, area, periodic } = geo;
     const N = geo.N;
     const h = this.h;
+    if (this.dtCap > 0 && this.dt > this.dtCap) this.dt = this.dtCap;
     const vmax = this._rates();
     // CFL for explicit advection: rates do not depend on dt, so just shorten the step
     if (this._minW === undefined) { let mw = ds; for (let k = 0; k < N; k++) if (w[k] < mw) mw = w[k]; this._minW = mw; }

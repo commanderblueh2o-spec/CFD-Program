@@ -116,11 +116,24 @@ function applyEnv(ctx, st, t0) {
   const fs = ctx.fs;
   fs.env.T = (st.tempC ?? 25) + 273.15;
   const omega = ((st.rpm || 0) * 2 * Math.PI) / 60;
-  if (omega > 0 && omega * fs.dt > 0.3) {
-    const b = ((st.tilt || 0) * Math.PI) / 180;
-    fs.setGravity([0, 0, G0 * Math.cos(b)]); // fast rotation: transverse gravity averages out
+  fs.dtCap = 0;
+  if (omega > 0) {
+    // Resolve the rotation (rimming flow, drag-out of puddles) while the film is mobile;
+    // once the film moves negligibly per revolution, use the rotation-averaged gravity.
+    const { h, mu, hp, rho } = fs;
+    let vg = 0;
+    for (let k = 0; k < h.length; k++) if (h[k] > 4 * hp && !fs.mask[k]) { const v = (rho * G0 * h[k] * h[k]) / (mu[k] || ctx.coat.mu0); if (v > vg) vg = v; }
+    if (fs._minW === undefined) { let mw = fs.geo.ds; for (const x of fs.geo.w) if (x < mw) mw = x; fs._minW = mw; }
+    if (vg * ((2 * Math.PI) / omega) > 0.02 * fs._minW) {
+      fs.dtCap = 0.25 / omega;
+      if (fs.dt > fs.dtCap) fs.dt = fs.dtCap;
+      fs.setGravity(gravityBody(st.tilt || 0, omega * (fs.t - t0 + 0.5 * fs.dt)));
+    } else {
+      const b = ((st.tilt || 0) * Math.PI) / 180;
+      fs.setGravity([0, 0, G0 * Math.cos(b)]);
+    }
   } else {
-    fs.setGravity(gravityBody(st.tilt || 0, omega * (fs.t - t0 + 0.5 * fs.dt)));
+    fs.setGravity(gravityBody(st.tilt || 0, 0));
   }
 }
 
@@ -130,6 +143,22 @@ function freshLiquid(ctx, k, h) {
   const fs = ctx.fs, c = ctx.coat;
   fs.h[k] = Math.max(h, fs.hp); fs.m[k] = fs.h[k] * c.solids; fs.alpha[k] = 0;
 }
+
+function fmtMm(m) { return (m * 1e3).toFixed(1) + ' mm'; }
+
+// Liquid column held in a lumen by capillarity: kept as a filled (masked) region.
+function trapLiquid(ctx, a, b) {
+  const { geo, fs, coat } = ctx;
+  ctx.trapped = { a, b };
+  for (let i = 0; i < geo.Ni; i++) {
+    if (geo.s[i] < a - 0.5 * geo.ds || geo.s[i] > b + 0.5 * geo.ds) continue;
+    for (let j = 0; j < geo.Nj; j++) {
+      const k = i * geo.Nj + j;
+      fs.mask[k] = 1; fs.hFix[k] = geo.rHyd[i]; fs.h[k] = geo.rHyd[i]; fs.m[k] = geo.rHyd[i] * coat.solids; fs.alpha[k] = 0;
+    }
+  }
+}
+function isTrappedCell(ctx, i) { const t = ctx.trapped; return !!t && ctx.geo.s[i] >= t.a - 0.5 * ctx.geo.ds && ctx.geo.s[i] <= t.b + 0.5 * ctx.geo.ds; }
 
 // ---------------------------------------------------------------- stages
 const STAGES = {};
@@ -197,10 +226,35 @@ STAGES.airflow = {
       airMax = U;
       for (let k = 0; k < geo.N; k++) tauS[k] = 0.0035 * AIR_RHO * U * U * dir;
     }
-    ctx._air = { tauS, tauP, airMax };
+    ctx._air = { tauS, tauP, airMax, plug: null };
+    if (ctx.trapped && geo.surface === 'inner') {
+      const i0 = dir > 0 ? 0 : geo.Ni - 1;
+      const Rin = Math.sqrt(geo.A[i0] * geo.B[i0]);
+      const Uin = st.nozzleSpeed * eff * 0.7 * Math.exp(-Math.pow((st.offsetMm * 1e-3) / Rin, 2));
+      const { a, b } = ctx.trapped;
+      const plug = new Plug(ctx, dir > 0 ? a : b, dir, Math.abs(ctx.cumA(b) - ctx.cumA(a)));
+      plug.maxSpeed = 0; plug.pAir = 0.5 * AIR_RHO * Uin * Uin;
+      ctx._air.plug = plug; ctx.trapped = null;
+    }
     return { duration: st.duration, airU: airMax, airInLumen: geo.surface === 'inner' };
   },
-  hook(ctx) { ctx.fs.tauS.set(ctx._air.tauS); },
+  hook(ctx, st, tl) {
+    const fs = ctx.fs, plug = ctx._air.plug;
+    if (plug && !plug.done) {
+      // air jet stagnation pressure pushes the retained liquid plug out of the lumen
+      plugStep(ctx, plug, fs.dt, (p, len) => p.pAir + ctx.coat.rho * fs.env.g[2] * len * p.dir);
+      ctx.aux = { meniscus: plug.rear, front: plug.front(), speed: plug.speed };
+      if (plug.stuck && tl > 1) {
+        plug.done = true;
+        const sf = plug.front();
+        trapLiquid(ctx, Math.min(plug.rear, sf), Math.max(plug.rear, sf));
+        ctx.warnings.push(`Airflow (stagnation pressure ${plug.pAir.toFixed(0)} Pa) is too weak to blow out the liquid trapped in the lumen.`);
+      }
+      return;
+    }
+    fs.tauS.set(ctx._air.tauS);
+  },
+  dtMax(ctx) { const p = ctx._air?.plug; return p && !p.done ? Math.max(ctx.geo.ds / Math.max(p.speed, 1e-4) * 0.5, 1e-4) : 5; },
 };
 
 STAGES.spray = {
@@ -353,10 +407,11 @@ function plugStep(ctx, plug, dt, drive) {
   const pcRear = (2 * gamma * cth) / geo.rHyd[iR];
   const pcFront = frontInside ? (2 * gamma * cth) / geo.rHyd[ctx.iOf(sf)] : 0;
   const dP = drive(plug, hi - lo) - pcRear + pcFront;
-  if (dP <= 0) { plug.stuck = true; plug.speed = 0; }
+  let U0 = dP > 0 ? dP / Rv / geo.crossArea[iR] : 0;
+  if (U0 < 1e-7) { plug.stuck = true; plug.speed = 0; } // balanced by capillarity (creeping < 0.1 µm/s)
   else {
     plug.stuck = false;
-    let U = dP / Rv / geo.crossArea[iR];
+    let U = U0;
     if (plug.maxSpeed > 0) U = Math.min(U, plug.maxSpeed);
     plug.speed = U;
     const ds = U * dt * plug.dir;
@@ -391,7 +446,7 @@ function plugStep(ctx, plug, dt, drive) {
   const sf2 = plug.front();
   const a = Math.min(plug.rear, sf2), b = Math.max(plug.rear, sf2);
   const mu2 = mu;
-  const hFix = plug.hDep || brethertonFilm(geo.rHyd[iR], mu2, 1e-4, gamma);
+  const hFix = Math.max(plug.hDep || brethertonFilm(geo.rHyd[iR], mu2, 1e-4, gamma), 4 * fs.hp);
   for (let i = 0; i < geo.Ni; i++) {
     const inside = !plug.done && geo.s[i] >= a && geo.s[i] <= b;
     for (let j = 0; j < geo.Nj; j++) {
@@ -411,6 +466,7 @@ STAGES.vacuum = {
     }
     const fromStart = st.fromEnd !== 'end';
     const fill = Math.min(st.fillLengthMm * 1e-3, geo.L);
+    if (ctx.trapped) { for (let k = 0; k < geo.N; k++) fs.mask[k] = 0; ctx.trapped = null; }
     // through: plug pulled through toward the far end; back: sucked back out of the entry end
     const through = st.direction !== 'back';
     let rear, dir;
@@ -533,11 +589,11 @@ STAGES.dip = {
     if (!plug.done) {
       plugStep(ctx, plug, fs.dt, (p, len) => ctx.coat.rho * gcos * len);
       ctx.aux = { meniscus: plug.rear, speed: plug.speed };
-      if (plug.stuck && tl - dp.tDrain > 2) {
-        ctx.warnings.push('Capillary forces hold liquid in the lumen after withdrawal (column does not drain). Consider vacuum withdraw or airflow.');
-        plug.done = true; plug.trapped = true;
-        // leave the column as a thick film representing the retained liquid
-        for (let k = 0; k < geo.N; k++) if (fs.mask[k]) { fs.mask[k] = 0; const i = Math.floor(k / geo.Nj); freshLiquid(ctx, k, geo.rHyd[i] * 0.5); }
+      if (plug.stuck && tl - dp.tDrain > 1) {
+        plug.done = true;
+        const sf = plug.front();
+        trapLiquid(ctx, Math.min(plug.rear, sf), Math.max(plug.rear, sf));
+        ctx.warnings.push(`Capillary forces hold a ${fmtMm(ctx.trapped.b - ctx.trapped.a)} liquid column in the lumen after withdrawal. Consider vacuum withdraw or an airflow stage to clear it.`);
       }
     } else if (dp.tEnd === undefined) dp.tEnd = tl;
     if (dp.tEnd !== undefined && tl - dp.tEnd >= st.drainAfter) ctx._stageDone = true;
@@ -624,7 +680,7 @@ export function simulate(spec, cb = {}) {
       if (e !== STOP) throw e;
     }
     // unmask anything still held (e.g. bath cells after the stage)
-    for (let k = 0; k < geo.N; k++) if (fs.mask[k]) { fs.mask[k] = 0; }
+    for (let k = 0; k < geo.N; k++) if (fs.mask[k] && !isTrappedCell(ctx, Math.floor(k / geo.Nj))) fs.mask[k] = 0;
     clearFields(fs);
     frames.push(frameOf(ctx, si, (st.label || st.type) + ' (end)'));
     history.push(snapshotHistory(ctx, si));
