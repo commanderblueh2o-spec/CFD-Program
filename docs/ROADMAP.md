@@ -37,6 +37,8 @@ Findings: fill/dwell/withdraw coats 100% of the bore (vs ~37% for a single pumpe
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
+
+Finding (wall excess after draining): the drained cartridge still carries ~34 µL (65–105 µm wet) on its walls. Under 60 °C HACS air ~70% of it dries in place within ~1 min, and ~7 µL is pushed down and blown off at the bevel. Levers on the dry film: withdraw rate (10 vs 20 µL/s → −25%), air flow (60 vs 30 SCFH → −14%); a 60 s unheated pre-blow changes little (−4%) for 300 mPa·s HA.
 - [ ] Calibrate the HA preset against a measured SAICCS cartridge (coating volume, dry thickness, coverage, cure time)
 - [ ] Withdrawal speed profiles for dip coating (ramps and multi-step) to counter drainage gradients
 - [ ] Simultaneous inner + outer surface run (both walls of a tube in one simulation)
