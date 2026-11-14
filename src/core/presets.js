@@ -2,39 +2,37 @@
 
 export const IOL_CARTRIDGE = {
   type: 'iol_cartridge', chamberLength: 12, chamberWidth: 5.6, chamberHeight: 4.0,
-  taperLength: 14, nozzleWidth: 2.1, nozzleHeight: 1.7, nozzleLength: 10, tipWidth: 1.7, tipHeight: 1.35, wall: 0.6,
+  taperLength: 14, nozzleWidth: 2.1, nozzleHeight: 1.7, nozzleLength: 10, tipWidth: 1.7, tipHeight: 1.35, wall: 0.6, tipBevelDeg: 45, bevelClockDeg: 270,
 };
 
 export const PRESETS = [
   {
     id: 'saiccs_ha_heated',
-    name: 'SAICCS — HA coating: plasma → needle bead → blow-off → heated down-draft cure',
-    description: 'Stationary vertical cartridge (loading chamber up). Plasma treats the bore, a needle lays a bead of HA coating as it withdraws, horizontal nozzles blow the excess off the tip, then heated air blowing down through the cartridge dries and crosslinks the coating inside.',
+    name: 'SAICCS — HA: plasma → pump dispense → HACS (heated air 30 SCFH @ 60 °C + bevel blow-off)',
+    description: 'Stationary vertical cartridge, wide proximal end up. Plasma treats the bore, the inserter nozzle pumps HA coating into the proximal end (peristaltic pump), it runs down the bore, then in HACS heated air blows down through the cartridge to dry and crosslink it while horizontal nozzles aligned with the tip bevel blow out the excess.',
     geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'ha_thermal',
     grid: { ns: 120, nphi: 32 }, heatUpSeconds: 25,
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
-      { type: 'drip', label: 'Needle beads (4 around bore)', mode: 'bead', lines: 4, startMm: 33, endMm: 2, beadUlS: 2.5, needleMmS: 5, tilt: 0, drainAfter: 15 },
-      { type: 'airflow', label: 'Horizontal blow-off', duration: 8, nozzleSpeed: 0, crossJetSpeed: 25, crossJetEnd: 'end', crossJetReachMm: 3, tilt: 0 },
-      { type: 'airflow', label: 'Heated down-draft cure', duration: 600, nozzleSpeed: 6, airTempC: 120, fromEnd: 'start', tilt: 0 },
+      { type: 'drip', label: 'Pump dispense (proximal end)', mode: 'pump', startMm: 1.5, pumpUlS: 5, pumpVolumeUl: 12, lines: 1, tilt: 0, drainAfter: 20 },
+      { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tilt: 0 },
       { type: 'dwell', label: 'Cool down', duration: 60, tilt: 0 },
     ],
-    metrics: { zone: [1, 35] },
+    metrics: { zone: [1, 34] },
   },
   {
     id: 'saiccs_ha_oven',
-    name: 'IOL cartridge — HA coating, blow-off then stationary oven cure',
-    description: 'Same coating sequence, but the cartridge is cured standing still in a 110 °C oven (part heats up with a thermal lag).',
+    name: 'IOL cartridge — HA: pump dispense → bevel blow-off → stationary oven cure',
+    description: 'Same dispense, ambient-air blow-off at the bevel, then the cartridge cures standing still in an 80 °C oven (the part heats up with a thermal lag).',
     geometry: { ...IOL_CARTRIDGE }, surface: 'inner', substrate: 'pp', coating: 'ha_thermal',
     grid: { ns: 120, nphi: 32 }, heatUpSeconds: 40,
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
-      { type: 'drip', label: 'Needle beads (4 around bore)', mode: 'bead', lines: 4, startMm: 33, endMm: 2, beadUlS: 2.5, needleMmS: 5, tilt: 0, drainAfter: 15 },
-      { type: 'airflow', label: 'Horizontal blow-off', duration: 8, nozzleSpeed: 0, crossJetSpeed: 25, crossJetEnd: 'end', crossJetReachMm: 3, tilt: 0 },
-      { type: 'dwell', label: 'Flash-off', duration: 120, tilt: 0 },
-      { type: 'cure', label: 'Oven cure 110 °C', mode: 'thermal', duration: 1200, tempC: 110, tilt: 0, ambientAir: 0.5 },
+      { type: 'drip', label: 'Pump dispense (proximal end)', mode: 'pump', startMm: 1.5, pumpUlS: 5, pumpVolumeUl: 12, lines: 1, tilt: 0, drainAfter: 20 },
+      { type: 'airflow', label: 'Air purge + bevel blow-off', duration: 30, airFlowScfh: 30, airTempC: 25, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
+      { type: 'cure', label: 'Oven cure 80 °C', mode: 'thermal', duration: 900, tempC: 80, tilt: 0, ambientAir: 0.5 },
     ],
-    metrics: { zone: [1, 35] },
+    metrics: { zone: [1, 34] },
   },
   {
     id: 'cartridge_vacuum',
@@ -66,14 +64,14 @@ export const PRESETS = [
   {
     id: 'catheter_ha_dip',
     name: 'Catheter shaft — HA hydrophilic dip, oven cure',
-    description: 'Vertical dip in an HA coating, drain and flash, then crosslink in a 110 °C oven.',
+    description: 'Vertical dip in an HA coating, drain and flash, then crosslink in an 80 °C oven.',
     geometry: { type: 'catheter', length: 60, od: 1.67, id: 1.1, tipLength: 6, tipOd: 1.1 }, surface: 'outer', substrate: 'pebax', coating: 'ha_thermal',
     grid: { ns: 120, nphi: 24 }, heatUpSeconds: 20,
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, tilt: 0 },
       { type: 'dip', label: 'Dip', speed: 2, dwell: 5, drainAfter: 20, tilt: 0 },
       { type: 'dwell', label: 'Flash-off', duration: 120, tilt: 0 },
-      { type: 'cure', label: 'Oven cure 110 °C', mode: 'thermal', duration: 900, tempC: 110, tilt: 0 },
+      { type: 'cure', label: 'Oven cure 80 °C', mode: 'thermal', duration: 900, tempC: 80, tilt: 0 },
     ],
     metrics: { zone: [2, 58] },
   },

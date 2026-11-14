@@ -40,8 +40,9 @@ export const COATINGS = {
   ha_thermal: {
     name: 'Hydrophilic HA (aqueous, thermal crosslink)', d: 26, p: 30, mu0: 0.3, rho: 1005, solids: 0.025, phiMax: 0.92,
     evap0: 0.045, dHvap: 42, EaMu: 20, thick: 3.5,
-    cure: { model: 'thermal', A1: 1.4e7, Ea1: 70, A2: 0, Ea2: 70, m: 1, n: 1, alphaGel: 0.35 }, shrink: 0.1,
-    note: 'Hyaluronic-acid based lubricious coating, crosslinked by heat (~100–120 °C)',
+    // ~10 min to 90 % at 60 °C, ~2.5 min at 80 °C (heated-air cure window); calibrate to the product
+    cure: { model: 'thermal', A1: 3.6e8, Ea1: 70, A2: 0, Ea2: 70, m: 1, n: 1, alphaGel: 0.35, refC: 60 }, shrink: 0.1,
+    note: 'Hyaluronic-acid based lubricious coating, crosslinked by heat (60–80 °C)',
   },
   pvp_ipa: {
     name: 'Hydrophilic PVP (IPA, UV)', d: 19, p: 4, mu0: 0.02, rho: 830, solids: 0.05, phiMax: 0.95,

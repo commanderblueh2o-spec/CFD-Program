@@ -42,6 +42,12 @@ Solids height *m = hφ* is advected with the liquid flux, using the upwind solid
 - **Rotation:** gravity rotates in the body frame. It is resolved (Δt ≤ 0.25/ω) while the film can move a noticeable fraction of a cell per revolution, which captures rimming flow. Otherwise the rotation-averaged gravity is used.
 - **Drip-off:** an end cell held by capillarity is limited to 0.6 ℓ_c when gravity pulls outward. The excess is counted as dripped.
 
+## 4a. Bevelled tips, bridging and air pressure
+- **Bevel:** a cut plane at angle β from square removes cells whose axial position exceeds s_cut = L − (q_max − q)·tan β, where q is the coordinate across the tip toward the long side. Removed cells carry no liquid and have zero-flux faces. Liquid leaves at the last existing cell of each generator line, and the cross-jet acts within a set reach of the bevel edge.
+- **Bridging:** when the liquid at an axial station fills more than 45% of the cross-section (film ≳ 0.25 R), the thin-film description is replaced by a liquid plug holding that volume. The plug moves under gravity, air pressure and capillary pressures (Section 4), sweeps up film lying beyond its menisci, and leaves a Bretherton film capped at 0.2 R (thicker tube films are unstable and stay with the plug).
+- **Air jet from SCFH:** Q = SCFH × 7.866·10⁻⁶ m³/s × T_jet/293 K, U_jet = Q/(πd²/4). The flow entering the bore is the capture fraction × Q. A blocked bore feels the pressure capture × ½ρU_jet².
+- **Cross-jet misalignment:** a jet at angle ψ to the bevel face adds a shear of 4 τ_x sin ψ e^{−d/reach} toward the edge (τ_x = 0.0035 ρU²).
+
 ## 4b. Heat
 Each cell carries a part temperature T_p that relaxes toward the local air temperature: dT_p/dt = (T_air − T_p)/τ, with τ the part heat-up time constant (default 30 s). Viscosity, evaporation and cure all use T_p.
 - **Oven or room:** T_air is the stage temperature.

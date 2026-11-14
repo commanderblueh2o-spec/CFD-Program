@@ -19,8 +19,17 @@ Development is ongoing. Scheduled improvement runs pick the next unchecked item,
 
 Findings: on a vertical, stationary cartridge the heated down-draft sets the film before it drains (87% coverage, flat axial profile). The oven route drains during flash-off (≈6× thicker at the tip). In a 2 mm bore the hot air cools markedly toward the outlet, so cure falls off along the bore.
 
+## Done (v0.3) — SAICCS details from the owner
+- [x] Peristaltic pump dispense through a fixed inserter nozzle at the wide proximal end
+- [x] Bevelled cartridge tip; horizontal HACS jets aligned with the bevel (misalignment angle setting)
+- [x] Heated air in SCFH (20–60, default 30 SCFH at 60 °C), nozzle diameter and capture fraction
+- [x] HA cure kinetics retuned to the 60–80 °C window
+- [x] Liquid bridging into plugs in narrowing bores; plugs moved by gravity and air pressure; graceful stop at the computing time limit
+
+Findings: with one pumped stream, coverage is limited by wetting (plasma reach) and volume. Larger volumes bridge the nozzle and the plug coats all the way round. Aligned bevel jets keep the bevel-face film (31 µm vs 7 µm at 40° misalignment).
+
 ## Next
-- [ ] Confirm SAICCS details with the owner (dispense method, nozzle speeds and temperatures, which opening the blow-off acts on) and calibrate the presets
+- [ ] Calibrate the HA preset against a measured SAICCS cartridge (coating volume, dry thickness, coverage, cure time)
 - [ ] Withdrawal speed profiles for dip coating (ramps and multi-step) to counter drainage gradients
 - [ ] Simultaneous inner + outer surface run (both walls of a tube in one simulation)
 - [ ] Marangoni stresses from solids-dependent surface tension (edge and picture-frame effects)

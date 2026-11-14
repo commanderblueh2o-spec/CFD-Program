@@ -7,9 +7,9 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 | **Plasma activation** | Raises substrate polar surface energy (lower contact angle). Decays with depth inside lumens and recovers over time (hydrophobic recovery). |
 | **Dip coating** | Outer surface: Landau–Levich–Derjaguin / fibre entrainment. Lumen: filling with capillary rise, column drainage, Bretherton film behind the receding meniscus, and capillary hold-up of short columns. |
 | **Spray coating** | Traversing nozzle with a Gaussian footprint, incidence angle, part rotation, transfer efficiency and in-flight solvent loss. Lumen: radial-spray lance. |
-| **Drip insertion** | Discrete drops or a continuous bead laid by a moving needle, landing at the lowest point inside or the top outside. |
+| **Drip / pump insertion** | A fixed inserter nozzle fed by a peristaltic pump (rate and volume), discrete drops, or a bead laid by a moving needle; several nozzles can be spaced around the bore. Liquid that collects in a narrowing bore bridges into a plug, which drains, is pushed out by air, or stays held by capillarity. |
 | **Vacuum withdraw** | Lumen filled, then a regulated vacuum pulls the plug through or back out. Poiseuille plug dynamics with capillary pressures, Bretherton film versus meniscus speed, then air draw. |
-| **Airflow: heated down-draft and blow-off** | Axial air jet into the bore, optionally heated. The air cools along the bore through duct heat transfer, and the wall heats up with a thermal lag, which cures thermal coatings from the inside. Horizontal cross-jets strip excess liquid at an opening. Shear drives the film, evaporation increases, and the jet can clear trapped plugs. |
+| **HACS airflow: heated down-draft and bevel blow-off** | Heated air set in SCFH (converted to jet velocity via the nozzle diameter, with the fraction entering the bore as a setting). The air cools along the bore through duct heat transfer, and the wall heats up with a thermal lag, which cures thermal coatings from the inside. Its pressure pushes liquid plugs out. Horizontal jets aligned with the tip bevel strip excess at the tip; a misalignment angle shows how off-axis jets also shear the coating on the bevel face. |
 | **Flash-off / dwell** | Levelling, drainage, sag and drying under a set temperature, tilt, rotation and air speed. |
 | **Cure** | Stationary thermal oven (the part heats up with a lag, then Arrhenius crosslinking) or UV (dose-driven). Viscosity rises to gelation and freezes the film. |
 
@@ -30,7 +30,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 
 ## Geometries and materials
 
-Catheter or tube (optional tapered tip and ovality), IOL cartridge (loading chamber → taper → nozzle, elliptical sections), a custom axial profile, and a flat coupon. The substrate library covers PP, PC, PE, PTFE, FEP, Pebax, TPU, nylon, silicone, PVC, PEEK, stainless steel, nitinol and glass. The coating library covers hydrophilic HA (hyaluronic acid, aqueous, thermal crosslink), hydrophilic PVP (aqueous and IPA, UV), silicone dispersion and oils, PTFE dispersion, PU solution, UV acrylate, heparin solution and water. Every property can be edited.
+Catheter or tube (optional tapered tip, ovality and bevel), IOL cartridge (loading chamber → taper → nozzle with a bevelled tip, elliptical sections), a custom axial profile, and a flat coupon. The substrate library covers PP, PC, PE, PTFE, FEP, Pebax, TPU, nylon, silicone, PVC, PEEK, stainless steel, nitinol and glass. The coating library covers hydrophilic HA (hyaluronic acid, aqueous, thermal crosslink), hydrophilic PVP (aqueous and IPA, UV), silicone dispersion and oils, PTFE dispersion, PU solution, UV acrylate, heparin solution and water. Every property can be edited.
 
 ## The physics in one paragraph
 
@@ -38,7 +38,7 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 
 ## Verification
 
-`npm test` runs 19 checks against analytic results, including:
+`npm test` runs 22 checks against analytic results, including:
 
 - capillary levelling decay rate (linear theory, within 0.5%)
 - Jeffreys gravity drainage (within ~4%)
@@ -52,7 +52,9 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 - Rayleigh–Plateau beading on thin fibres
 - oven cure with part heat-up lag (integrated Arrhenius kinetics)
 - heated down-draft wall heating and cure gradient along the bore
-- cross-jet blow-off
+- cross-jet blow-off, and bevel-aligned versus misaligned jets
+- bevel geometry mass conservation
+- plug formation in a narrow bore and clearing by air
 
 `npm run presets` runs every preset headlessly, and `npm run ui-test` drives the built app in headless Chromium.
 

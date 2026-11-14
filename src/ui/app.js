@@ -14,7 +14,7 @@ const VERSION = '1.0.0';
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, html = '') => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (html) e.innerHTML = html; return e; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const LN10 = Math.log(10), R_GAS = 8.314, T_REF_CURE = 383.15;
+const LN10 = Math.log(10), R_GAS = 8.314;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 const state = {
@@ -142,11 +142,12 @@ function coatingSliders() {
     { id: 'evap', def: { label: 'Drying rate', unit: 'µm/s', min: 0, max: 20, sl: [0.005, 3, 'log'], help: 'Solvent evaporation of a flat film at 25 °C in still air.', disabled: c.solids >= c.phiMax }, get: () => c.evap0, set: (v) => { ov().evap0 = v; } },
   ];
   if (c.cure.model === 'thermal') {
-    const k = (cu) => cu.A1 * Math.exp(-(cu.Ea1 * 1000) / (R_GAS * T_REF_CURE));
-    out.push({ id: 'cure', def: { label: 'Cure time at 110 °C (90%)', unit: 'min', min: 0.05, max: 2000, sl: [0.5, 240, 'log'], help: 'Sets the crosslinking rate; the temperature dependence follows the activation energy.' },
-      get: () => LN10 / k(c.cure) / 60, set: (v) => { const cu = { ...c.cure, ...(ov().cure || {}) }; cu.A1 = (LN10 / (v * 60)) * Math.exp((cu.Ea1 * 1000) / (R_GAS * T_REF_CURE)); ov().cure = cu; } });
+    const Tref = (c.cure.refC ?? 110) + 273.15;
+    const k = (cu) => cu.A1 * Math.exp(-(cu.Ea1 * 1000) / (R_GAS * Tref));
+    out.push({ id: 'cure', def: { label: `Cure time at ${c.cure.refC ?? 110} °C (90%)`, unit: 'min', min: 0.05, max: 2000, sl: [0.5, 240, 'log'], help: 'Sets the crosslinking rate; the temperature dependence follows the activation energy.' },
+      get: () => LN10 / k(c.cure) / 60, set: (v) => { const cu = { ...c.cure, ...(ov().cure || {}) }; cu.A1 = (LN10 / (v * 60)) * Math.exp((cu.Ea1 * 1000) / (R_GAS * Tref)); ov().cure = cu; } });
     out.push({ id: 'ea', def: { label: 'Cure activation energy', unit: 'kJ/mol', min: 20, max: 200, step: 1, sl: [30, 150, 'lin'], help: 'Higher = more sensitive to temperature.' },
-      get: () => c.cure.Ea1, set: (v) => { const cu = { ...c.cure, ...(ov().cure || {}) }; const kref = cu.A1 * Math.exp(-(cu.Ea1 * 1000) / (R_GAS * T_REF_CURE)); cu.Ea1 = v; cu.A1 = kref * Math.exp((v * 1000) / (R_GAS * T_REF_CURE)); ov().cure = cu; } });
+      get: () => c.cure.Ea1, set: (v) => { const cu = { ...c.cure, ...(ov().cure || {}) }; const kref = cu.A1 * Math.exp(-(cu.Ea1 * 1000) / (R_GAS * Tref)); cu.Ea1 = v; cu.A1 = kref * Math.exp((v * 1000) / (R_GAS * Tref)); ov().cure = cu; } });
   } else if (c.cure.model === 'uv') {
     out.push({ id: 'cure', def: { label: 'UV dose for 90% cure', unit: 'mJ/cm²', min: 10, max: 1e5, sl: [100, 20000, 'log'] }, get: () => (100 * LN10) / c.cure.kUV, set: (v) => { ov().cure = { ...c.cure, kUV: (100 * LN10) / v }; } });
   }
@@ -185,9 +186,9 @@ function stageSummary(st) {
     case 'plasma': return `${s.duration} s`;
     case 'dip': return `${s.speed} mm/s`;
     case 'spray': return `${s.flowMlMin} mL/min × ${s.passes}`;
-    case 'drip': return s.mode === 'bead' ? `${s.lines > 1 ? s.lines + ' × ' : ''}${s.beadUlS} µL/s` : `${s.count} × ${s.dropUl} µL`;
+    case 'drip': return s.mode === 'pump' ? `${s.pumpVolumeUl} µL @ ${s.pumpUlS} µL/s` : s.mode === 'bead' ? `${s.lines > 1 ? s.lines + ' × ' : ''}${s.beadUlS} µL/s` : `${s.count} × ${s.dropUl} µL`;
     case 'vacuum': return `${s.pressureKpa} kPa`;
-    case 'airflow': return [s.nozzleSpeed > 0 ? `${s.nozzleSpeed} m/s${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : '', s.crossJetSpeed > 0 && s.crossJetEnd !== 'none' ? `blow-off ${s.crossJetSpeed} m/s` : '', `${s.duration} s`].filter(Boolean).join(' · ');
+    case 'airflow': return [s.airFlowScfh > 0 ? `${s.airFlowScfh} SCFH${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : s.nozzleSpeed > 0 ? `${s.nozzleSpeed} m/s${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : '', s.crossJetSpeed > 0 && s.crossJetEnd !== 'none' ? `blow-off ${s.crossJetSpeed} m/s` : '', `${s.duration} s`].filter(Boolean).join(' · ');
     case 'dwell': return `${s.duration} s`;
     case 'cure': return s.mode === 'uv' ? `UV ${s.uvIntensity} mW/cm² · ${s.duration} s` : `${s.tempC} °C · ${fmt(s.duration / 60)} min`;
     default: return '';
@@ -198,6 +199,7 @@ function updateStageSummaries() { document.querySelectorAll('.stage').forEach((n
 function fieldVisible(st, d) {
   const vals = { ...STAGE_DEFAULTS[st.type], ...st };
   if (d.mode && vals.mode !== d.mode) return false;
+  if (d.modes && !d.modes.includes(vals.mode)) return false;
   if (d.cure && vals.mode !== d.cure) return false;
   return true;
 }
@@ -283,7 +285,7 @@ function previewGeometry(force) {
   if (!force && state.result && state.resultSpecKey === specKey(state.spec)) return;
   try {
     const geo = buildGeometry(state.spec);
-    const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm) };
+    const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm), voidMask: geo.voidMask };
     view3d.setGeometry(sg);
     const st0 = state.spec.stages[0];
     view3d.tilt = st0 ? st0.tilt ?? STAGE_DEFAULTS[st0.type].tilt ?? 90 : 90;
@@ -460,11 +462,12 @@ function activityOf(fr, st) {
     case 'plasma': bg = 'fx-plasma'; bits.push(`Plasma treating ${inner ? 'the bore' : 'the surface'}`); break;
     case 'dip': if (fr.aux.bath !== undefined && !ended) { fx.push({ kind: 'bath', s: fr.aux.bath }); bits.push(`Withdrawing from the bath at ${st.speed} mm/s`); } else bits.push('Draining after dipping'); break;
     case 'spray': if (fr.aux.nozzle !== null && fr.aux.nozzle !== undefined) { fx.push({ kind: 'spray', s: fr.aux.nozzle }); bits.push(`Spraying ${st.flowMlMin} mL/min`); } else bits.push('Spray settling'); break;
-    case 'drip': if (fr.aux.nozzle !== undefined && !ended) { fx.push({ kind: 'needle', s: fr.aux.nozzle, fromEnd: st.endMm > st.startMm ? 'end' : 'start' }); bits.push(st.mode === 'bead' ? `Needle laying ${st.lines > 1 ? st.lines + ' beads' : 'a bead'} (${st.beadUlS} µL/s)` : 'Dispensing drops'); } else bits.push('Coating spreading and draining'); break;
+    case 'drip': if (fr.aux.nozzle !== undefined && !ended) { fx.push({ kind: 'needle', s: fr.aux.nozzle, fromEnd: st.mode === 'pump' ? 'start' : st.endMm > st.startMm ? 'end' : 'start' }); bits.push(st.mode === 'pump' ? `Pumping coating in at ${st.pumpUlS} µL/s` : st.mode === 'bead' ? `Needle laying ${st.lines > 1 ? st.lines + ' beads' : 'a bead'} (${st.beadUlS} µL/s)` : 'Dispensing drops'); } else bits.push('Coating spreading and draining'); break;
     case 'vacuum': if (fr.aux.air) { fx.push({ kind: 'air', speed: fr.aux.air, dir: st.direction === 'back' ? -1 : 1, hot: false }); bits.push(`Vacuum drawing air through (${fmt(fr.aux.air)} m/s)`); } else bits.push(`Vacuum pulling the liquid out${fr.aux.speed ? ` at ${fmt(fr.aux.speed * 1e3)} mm/s` : ''}`); break;
     case 'airflow':
-      if (st.nozzleSpeed > 0) { const hot = st.airTempC > 40; fx.push({ kind: 'air', speed: st.nozzleSpeed, dir: st.fromEnd === 'end' ? -1 : 1, hot }); bits.push(`${hot ? `Heated air ${st.airTempC} °C` : 'Air'} at ${st.nozzleSpeed} m/s ${inner ? 'through the bore' : 'over the part'}`); if (hot) bg = 'fx-warm'; }
-      if (st.crossJetSpeed > 0 && st.crossJetEnd !== 'none') { fx.push({ kind: 'cross', end: st.crossJetEnd }); bits.push(`Horizontal jet blowing excess off the ${st.crossJetEnd === 'end' ? 'far (s = L)' : 'near (s = 0)'} opening`); }
+      if (st.nozzleSpeed > 0 || st.airFlowScfh > 0) { const hot = st.airTempC > 40; fx.push({ kind: 'air', speed: st.airFlowScfh > 0 ? st.airFlowScfh / 4 : st.nozzleSpeed, dir: st.fromEnd === 'end' ? -1 : 1, hot }); bits.push(`${hot ? `Heated air ${st.airTempC} °C` : 'Air'} ${st.airFlowScfh > 0 ? st.airFlowScfh + ' SCFH' : st.nozzleSpeed + ' m/s'} ${inner ? 'down the bore' : 'over the part'}`); if (hot) bg = 'fx-warm'; }
+      if (st.crossJetSpeed > 0 && st.crossJetEnd !== 'none') { fx.push({ kind: 'cross', end: st.crossJetEnd }); bits.push(`horizontal jets clearing the ${st.crossJetEnd === 'end' ? 'tip bevel' : 'top opening'}`); }
+      if (fr.aux && fr.aux.meniscus !== undefined && fr.aux.front !== undefined) bits.push('liquid plug in the bore');
       break;
     case 'dwell': bits.push(`Resting at ${st.tempC} °C — levelling, draining and drying`); break;
     case 'cure': if (st.mode === 'uv') { bg = 'fx-uv'; bits.push(`UV exposure ${st.uvIntensity} mW/cm²`); } else { bg = 'fx-oven'; bits.push(`Oven at ${st.tempC} °C`); } break;

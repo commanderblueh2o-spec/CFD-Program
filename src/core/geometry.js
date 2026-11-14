@@ -135,9 +135,34 @@ export function buildGeometry(spec) {
     crossArea[i] = flat ? 0 : Math.PI * a * b;
     rHyd[i] = flat ? 0 : 2 * crossArea[i] / P; // = D_h / 2
   }
+  // Bevelled tip (IOL cartridge nozzles): the tube end is cut by a plane at `tipBevelDeg`
+  // from square. Cells beyond the cut do not exist (void). edgeEnd = axial distance from a
+  // cell to the open tip edge (along its own generator line).
+  const voidMask = new Uint8Array(N);
+  const edgeEnd = new Float64Array(N);
+  const bev = !flat ? ((spec.geometry.tipBevelDeg || 0) * Math.PI) / 180 : 0;
+  const cb = (((spec.geometry.bevelClockDeg ?? 270) * Math.PI) / 180);
+  const aT = A[Ni - 1], bT = B[Ni - 1];
+  const qmax = Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb));
+  for (let i = 0; i < Ni; i++) {
+    for (let j = 0; j < Nj; j++) {
+      const k = i * Nj + j;
+      let sCut = Lm;
+      if (bev > 0) {
+        const q = pos[3 * k] * Math.cos(cb) + pos[3 * k + 1] * Math.sin(cb);
+        const qT = (q / Math.max(Math.hypot(A[i] * Math.cos(cb), B[i] * Math.sin(cb)), 1e-12)) * qmax;
+        sCut = Lm - (qmax - qT) * Math.tan(Math.min(bev, 1.4));
+      }
+      edgeEnd[k] = sCut - s[i];
+      if (edgeEnd[k] < 0) voidMask[k] = 1;
+    }
+  }
+  // last existing cell of each generator line (where liquid leaves the tip)
+  const endCell = new Int32Array(Nj);
+  for (let j = 0; j < Nj; j++) { let ii = Ni - 1; while (ii > 0 && voidMask[ii * Nj + j]) ii--; endCell[j] = ii; }
   return {
     spec, surface: surf, flat, periodic: !flat, Ni, Nj, N, ds, dphi, L: Lm, s, phi, A, B,
-    w, area, kc, nrm, es, ep, pos, crossArea, perim, rHyd,
+    w, area, kc, nrm, es, ep, pos, crossArea, perim, rHyd, voidMask, edgeEnd, endCell, hasVoid: voidMask.some((v) => v),
   };
 }
 

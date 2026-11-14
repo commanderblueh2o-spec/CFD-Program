@@ -86,7 +86,10 @@ export class View3D {
     const cols = flat ? Nj : Nj + 1;
     this.cols = cols;
     const idx = [];
+    const vm = geo.voidMask;
+    const isV = (i, jj) => !!(vm && vm[i * Nj + (jj % Nj)]);
     for (let i = 0; i < Ni - 1; i++) for (let j = 0; j < cols - 1; j++) {
+      if (isV(i, j) || isV(i, j + 1) || isV(i + 1, j) || isV(i + 1, j + 1)) continue; // bevel cut-away
       const a = i * cols + j, b = a + 1, c = a + cols, d = c + 1;
       idx.push(a, c, b, b, c, d);
     }

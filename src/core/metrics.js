@@ -40,13 +40,14 @@ export function computeMetrics(ctx, stages) {
     let am = 0, aw = 0, mn = Infinity, mx = 0, wm = 0;
     for (let j = 0; j < Nj; j++) {
       const k = i * Nj + j, a = geo.area[k];
+      if (geo.voidMask && geo.voidMask[k]) continue;
       am += dry[k] * a; wm += wet[k] * a; aw += a; mn = Math.min(mn, dry[k]); mx = Math.max(mx, dry[k]);
       if (geo.s[i] >= z0 && geo.s[i] <= z1) {
         zd.push(dry[k]); zw.push(wet[k]); za.push(a); zalpha.push(fs.alpha[k]); zv.push(k);
         circ[j] += dry[k] * a; circW[j] += a;
       }
     }
-    axial.s.push(geo.s[i] * 1e3); axial.mean.push((am / aw) * 1e6); axial.min.push(mn * 1e6); axial.max.push(mx * 1e6); axial.wetMean.push((wm / aw) * 1e6);
+    axial.s.push(geo.s[i] * 1e3); axial.mean.push(aw > 0 ? (am / aw) * 1e6 : 0); axial.min.push(isFinite(mn) ? mn * 1e6 : 0); axial.max.push(mx * 1e6); axial.wetMean.push(aw > 0 ? (wm / aw) * 1e6 : 0);
   }
   const circProfile = { phiDeg: Array.from(geo.phi, (p) => (p * 180) / Math.PI), mean: Array.from(circ, (c, j) => (circW[j] ? (c / circW[j]) * 1e6 : 0)) };
   const D = weightedStats(zd, za);

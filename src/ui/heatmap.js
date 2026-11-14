@@ -24,7 +24,8 @@ export class Heatmap {
     const [lo, hi] = range;
     for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) {
       const v = values[i * Nj + j];
-      const [r, gg, b] = colorAt(cmap, (v - lo) / (hi - lo));
+      const cut = geo.voidMask && geo.voidMask[i * Nj + j];
+      const [r, gg, b] = cut ? [21, 24, 29] : colorAt(cmap, (v - lo) / (hi - lo));
       const p = 4 * ((Nj - 1 - j) * Ni + i);
       id.data[p] = r; id.data[p + 1] = gg; id.data[p + 2] = b; id.data[p + 3] = 255;
     }
