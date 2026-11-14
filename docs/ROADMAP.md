@@ -35,7 +35,8 @@ Findings: with one pumped stream, coverage is limited by wetting (plasma reach) 
 Findings: fill/dwell/withdraw coats 100% of the bore (vs ~37% for a single pumped stream). The film follows the meniscus speed Q/A(s), so it is thinnest at the top of the wide chamber and thickest through the taper. Withdraw rate is the main thickness lever. 10 min of 60 °C air reaches ~82% cure, lowest toward the tip.
 
 ## Next
-- [ ] Confirm with the owner how the cartridge empties after the dwell (withdraw pump restart vs gravity/air) and the pump rates
+- [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
+- [ ] Get typical fill/withdraw pump rates from the owner
 - [ ] Calibrate the HA preset against a measured SAICCS cartridge (coating volume, dry thickness, coverage, cure time)
 - [ ] Withdrawal speed profiles for dip coating (ramps and multi-step) to counter drainage gradients
 - [ ] Simultaneous inner + outer surface run (both walls of a tube in one simulation)
