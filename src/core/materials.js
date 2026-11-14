@@ -26,31 +26,32 @@ export const SUBSTRATES = {
 //  phiMax: solids fraction at which the film is solvent-free/packed
 //  evap0: solvent evaporation rate of a flat free film, still air, 25 C [um/s]
 //  dHvap: solvent heat of vaporisation [kJ/mol] (temperature dependence of evaporation)
+//  solventM: solvent molar mass [g/mol] (latent heat per kg for evaporative cooling)
 //  EaMu: viscosity activation energy [kJ/mol]
 //  thick: exponent of solids-driven thickening (Krieger-type)
 //  cure: cure model and kinetic constants
 //  shrink: volumetric cure shrinkage of the dry film (fraction)
 export const COATINGS = {
   pvp_water: {
-    name: 'Hydrophilic PVP (aqueous/ethanol, UV)', d: 24, p: 14, mu0: 0.05, rho: 980, solids: 0.06, phiMax: 0.95,
+    name: 'Hydrophilic PVP (aqueous/ethanol, UV)', solventM: 25, d: 24, p: 14, mu0: 0.05, rho: 980, solids: 0.06, phiMax: 0.95,
     evap0: 0.12, dHvap: 42, EaMu: 18, thick: 4,
     cure: { model: 'uv', kUV: 0.15, nUV: 1, alphaGel: 0.3 }, shrink: 0.05,
     note: 'Lubricious hydrophilic topcoat typical of catheters and IOL cartridges',
   },
   ha_thermal: {
-    name: 'Hydrophilic HA (aqueous, thermal crosslink)', d: 26, p: 30, mu0: 0.3, rho: 1005, solids: 0.025, phiMax: 0.92,
+    name: 'Hydrophilic HA (aqueous, thermal crosslink)', solventM: 18, d: 26, p: 30, mu0: 0.3, rho: 1005, solids: 0.025, phiMax: 0.92,
     evap0: 0.045, dHvap: 42, EaMu: 20, thick: 3.5,
     // ~10 min to 90 % at 60 °C, ~2.5 min at 80 °C (heated-air cure window); calibrate to the product
     cure: { model: 'thermal', A1: 3.6e8, Ea1: 70, A2: 0, Ea2: 70, m: 1, n: 1, alphaGel: 0.35, refC: 60 }, shrink: 0.1,
     note: 'Hyaluronic-acid based lubricious coating, crosslinked by heat (60–80 °C)',
   },
   pvp_ipa: {
-    name: 'Hydrophilic PVP (IPA, UV)', d: 19, p: 4, mu0: 0.02, rho: 830, solids: 0.05, phiMax: 0.95,
+    name: 'Hydrophilic PVP (IPA, UV)', solventM: 60, d: 19, p: 4, mu0: 0.02, rho: 830, solids: 0.05, phiMax: 0.95,
     evap0: 0.25, dHvap: 45, EaMu: 18, thick: 4,
     cure: { model: 'uv', kUV: 0.15, nUV: 1, alphaGel: 0.3 }, shrink: 0.05,
   },
   silicone_disp: {
-    name: 'Silicone dispersion (heptane, heat cure)', d: 20.5, p: 0.5, mu0: 0.012, rho: 720, solids: 0.10, phiMax: 0.98,
+    name: 'Silicone dispersion (heptane, heat cure)', solventM: 100, d: 20.5, p: 0.5, mu0: 0.012, rho: 720, solids: 0.10, phiMax: 0.98,
     evap0: 0.6, dHvap: 36, EaMu: 15, thick: 3.5,
     cure: { model: 'thermal', A1: 4.7e5, Ea1: 60, A2: 0, Ea2: 60, m: 1, n: 1.5, alphaGel: 0.5 }, shrink: 0.02,
     note: 'Silicone lubricant coatings for needles, catheters and cartridges',
@@ -64,12 +65,12 @@ export const COATINGS = {
     evap0: 0, dHvap: 40, EaMu: 14, thick: 0, cure: { model: 'none' }, shrink: 0,
   },
   ptfe_disp: {
-    name: 'PTFE aqueous dispersion (sinter)', d: 22, p: 8, mu0: 0.02, rho: 1450, solids: 0.40, phiMax: 0.64,
+    name: 'PTFE aqueous dispersion (sinter)', solventM: 18, d: 22, p: 8, mu0: 0.02, rho: 1450, solids: 0.40, phiMax: 0.64,
     evap0: 0.05, dHvap: 42, EaMu: 16, thick: 2.5,
     cure: { model: 'thermal', A1: 2.0e7, Ea1: 90, A2: 0, Ea2: 90, m: 1, n: 1, alphaGel: 0.2 }, shrink: 0.15,
   },
   pu_thf: {
-    name: 'Polyurethane solution (THF, air dry)', d: 24, p: 3, mu0: 0.10, rho: 900, solids: 0.10, phiMax: 0.97,
+    name: 'Polyurethane solution (THF, air dry)', solventM: 72, d: 24, p: 3, mu0: 0.10, rho: 900, solids: 0.10, phiMax: 0.97,
     evap0: 1.0, dHvap: 32, EaMu: 16, thick: 5,
     cure: { model: 'none' }, shrink: 0,
   },
@@ -79,11 +80,11 @@ export const COATINGS = {
     cure: { model: 'uv', kUV: 0.4, nUV: 1, alphaGel: 0.15 }, shrink: 0.08,
   },
   heparin_aq: {
-    name: 'Heparin aqueous solution', d: 22, p: 38, mu0: 0.003, rho: 1005, solids: 0.02, phiMax: 0.9,
+    name: 'Heparin aqueous solution', solventM: 18, d: 22, p: 38, mu0: 0.003, rho: 1005, solids: 0.02, phiMax: 0.9,
     evap0: 0.04, dHvap: 42, EaMu: 16, thick: 3, cure: { model: 'none' }, shrink: 0,
   },
   water: {
-    name: 'Water (reference)', d: 21.8, p: 51.0, mu0: 0.00089, rho: 997, solids: 0.0, phiMax: 0.9,
+    name: 'Water (reference)', solventM: 18, d: 21.8, p: 51.0, mu0: 0.00089, rho: 997, solids: 0.0, phiMax: 0.9,
     evap0: 0.04, dHvap: 42, EaMu: 16, thick: 0, cure: { model: 'none' }, shrink: 0,
   },
 };

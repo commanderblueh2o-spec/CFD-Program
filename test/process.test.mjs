@@ -46,9 +46,9 @@ test('narrow wetting lumen holds its liquid column after dip (capillary rise)', 
   // a weak air jet cannot clear it, a strong one can
   const weak = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, nozzleSpeed: 2, fromEnd: 'start', tilt: 0 }] });
   assert(weak.warnings.some((w) => /still held/.test(w)), 'weak air should fail to clear: ' + weak.warnings.join('; '));
-  const strong = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, nozzleSpeed: 60, fromEnd: 'start', tilt: 0 }] });
+  const strong = simulate({ ...spec, stages: [...spec.stages, { type: 'airflow', duration: 3, nozzleSpeed: 100, fromEnd: 'start', tilt: 0 }] });
   assert(!strong.warnings.some((w) => /still held/.test(w)), 'strong air should clear: ' + strong.warnings.join('; '));
-  return `Jurin height ${r.metrics.groups.jurinHeight_mm.toFixed(0)} mm; 60 m/s air clears it, 2 m/s does not`;
+  return `Jurin height ${r.metrics.groups.jurinHeight_mm.toFixed(0)} mm; 100 m/s jet clears it, 2 m/s does not`;
 });
 
 test('wide lumen drains after dip and leaves a thin film', () => {
@@ -232,6 +232,21 @@ test('fill, dwell & withdraw: pump-set meniscus speed gives the Bretherton film 
   assert(r.metrics.coverage > 0.999, 'whole bore should be coated');
   near(r.metrics.wet.mean * 1e-6, hB, 0.12, 'film thickness');
   return `meniscus ${(U * 1e3).toFixed(2)} mm/s → film ${r.metrics.wet.mean.toFixed(1)} µm vs Bretherton ${(hB * 1e6).toFixed(1)} µm, coverage 100%`;
+});
+
+test('coating draining to a bevelled tip pools there; bevel jets above the capillary hold blow it out', () => {
+  const mk = (jet) => ({
+    geometry: { type: 'catheter', length: 20, od: 2.2, id: 1.4, tipBevelDeg: 45 }, surface: 'inner', substrate: 'glass', coating: 'silicone_oil_350', coatingOverrides: { ...oil, mu0: 0.05 },
+    grid: { ns: 60, nphi: 16 },
+    stages: [{ type: 'drip', mode: 'pump', startMm: 8, pumpUlS: 10, pumpVolumeUl: 3, lines: 4, tilt: 0, drainAfter: 20 },
+             { type: 'airflow', duration: 2, nozzleSpeed: 0, crossJetSpeed: jet, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 }],
+  });
+  const held = simulate(mk(5)), blown = simulate(mk(30));
+  const pooled = held.metrics.defects.find((d) => /pooled at the tip/.test(d.title));
+  assert(pooled, 'expected a tip pool with weak jets: ' + held.warnings.join('; '));
+  assert(!blown.metrics.defects.some((d) => /pooled at the tip/.test(d.title)), 'strong jets should clear the pool');
+  near(held.metrics.massBalance.film_uL + held.metrics.massBalance.dripped_uL, 3, 0.03, 'volume (held)');
+  return `${pooled.detail.split(' collected')[0]} held at 5 m/s; cleared at 30 m/s`;
 });
 
 run();

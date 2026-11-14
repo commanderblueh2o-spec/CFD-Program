@@ -142,7 +142,11 @@ export function computeMetrics(ctx, stages) {
     if (residual > 0.05) add('medium', 'Film still wet / residual solvent', `About ${(residual * 100).toFixed(0)}% of the final film is still solvent.`, ctx.geo.surface === 'inner' ? 'Solvent escapes slowly from lumens: add an airflow stage, raise temperature, or extend flash-off.' : 'Extend flash-off or raise temperature / airflow before cure.');
     if (residual > 0.05 && coat.cure?.model !== 'none' && alphaMean > 0.5) add('medium', 'Solvent entrapment risk', 'The film cured while still holding solvent.', 'Insert a flash-off stage before cure.');
   }
-  for (const w of ctx.warnings || []) add('info', 'Process note', w, '');
+  if (ctx.poolReport && (ctx.poolReport.uL > 0.3 || ctx.poolReport.dryUm > 3 * Math.max(dryUm.p50, 0.05))) {
+    const P = ctx.poolReport;
+    add(P.uL > 1 ? 'high' : 'medium', `Coating pooled at the ${P.side === 1 ? 'tip' : 'top'}`, `${P.uL.toFixed(1)} µL collected at the opening and dried there (~${P.dryUm.toFixed(0)} µm dry over the last ${P.reachMm.toFixed(1)} mm).`, `Surface tension holds it; horizontal jets faster than ~${P.jet.toFixed(0)} m/s aimed along the bevel blow it out (or reduce the wall excess with a slower withdraw).`);
+  }
+  for (const w of ctx.warnings || []) if (!/pooled at the/.test(w)) add('info', 'Process note', w, '');
 
   return {
     zoneMm: zone, dry: dryUm, wet: wetUm, coverage, dewetFraction: dewetFrac, cureMean: alphaMean,

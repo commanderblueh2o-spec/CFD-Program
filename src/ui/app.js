@@ -410,8 +410,15 @@ function stateColors(fr) {
   const res = state.result, c = res._coat, n = fr.h.length, hp = res._hp;
   const rgb = new Float32Array(3 * n), gloss = new Float32Array(n);
   const canDry = c.solids < c.phiMax, curing = c.cure.model !== 'none';
+  const pool = fr.aux && fr.aux.pool, geo = res.geometry;
+  const inPool = (k) => {
+    if (!pool || !geo.edgeEnd) return false;
+    const i = Math.floor(k / geo.Nj);
+    if (pool[1] > 1e-12 && geo.edgeEnd[k] >= 0 && geo.edgeEnd[k] <= geo.poolReach[1]) return true;
+    return pool[0] > 1e-12 && geo.s[i] <= geo.poolReach[0];
+  };
   for (let k = 0; k < n; k++) {
-    if (fr.mask && fr.mask[k] === 1) { rgb[3 * k] = 0.08; rgb[3 * k + 1] = 0.30; rgb[3 * k + 2] = 0.80; gloss[k] = 1; continue; } // flooded / bath / plug
+    if ((fr.mask && fr.mask[k] === 1) || inPool(k)) { rgb[3 * k] = 0.08; rgb[3 * k + 1] = 0.30; rgb[3 * k + 2] = 0.80; gloss[k] = 1; continue; } // flooded / bath / plug
     const w = fr.h[k] - hp;
     if (w <= 3 * hp) continue;
     const t = clamp(0.5 + 0.45 * Math.log10(w / res._wetRef), 0, 1);
@@ -513,7 +520,7 @@ function updateViews() {
   view3d.cutaway = $('#cutaway').checked;
   view3d.tilt = st ? st.tilt ?? 90 : (res.spec.stages[0]?.tilt ?? STAGE_DEFAULTS[res.spec.stages[0]?.type]?.tilt ?? 90);
   let bare = null;
-  if (state.field !== 'theta' && state.field !== 'temp') { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) ? 1 : 0; }
+  if (state.field !== 'theta' && state.field !== 'temp') { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) && !(fr.aux?.pool && fr.aux.pool[1] > 1e-12 && res.geometry.edgeEnd && res.geometry.edgeEnd[k] >= 0 && res.geometry.edgeEnd[k] <= res.geometry.poolReach[1]) ? 1 : 0; }
   const act = activityOf(fr, st);
   if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, film, marks, bare, sc.rgb, sc.gloss); }
   else view3d.setField(vals, range, state.cmap, film, marks, bare);
@@ -521,7 +528,7 @@ function updateViews() {
   $('#v3d').className = 'view' + (state.tab === 'v3d' ? ' active' : '') + (act.bg ? ' ' + act.bg : '');
   let Tm = 0; for (const v of fr.T) Tm += v; Tm = Tm / fr.T.length - 273.15;
   $('#ovl3d').innerHTML = `<div class="ov-stage" style="border-color:${st ? res._stageColor(fr.stage) : '#888'}">${esc(fr.label.replace(/ \(end\)$/, ''))}</div>`
-    + `<div>${esc(act.text)}</div><div class="muted">t = ${fmtTime(fr.t)} · part ${Tm.toFixed(0)} °C</div>`
+    + `<div>${esc(act.text)}</div>${fr.aux?.pool && fr.aux.pool[1] > 1e-11 ? `<div>Pool held at the tip: ${(fr.aux.pool[1] * 1e9).toFixed(1)} µL</div>` : ''}<div class="muted">t = ${fmtTime(fr.t)} · part ${Tm.toFixed(0)} °C</div>`
     + (view3d.radial > 1.01 ? `<div class="muted">Radius drawn ×${fmt(view3d.radial)} for visibility</div>` : '');
   heatmap.set(res.geometry, vals, range, state.cmap, state.field === 'state' ? 'µm dry' : fieldDef.unit, marks);
   $('#tlInfo').textContent = `${fmtTime(fr.t)} / ${fmtTime(res.frames[res.frames.length - 1].t)}`;

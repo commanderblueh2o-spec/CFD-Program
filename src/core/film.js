@@ -39,6 +39,8 @@ export class FilmSolver {
     this.Tf = new Float64Array(N).fill(298.15);   // film/part temperature [K]
     this.Tair = new Float64Array(N).fill(298.15); // local air temperature the part relaxes to [K]
     this.tauHeat = opts.tauHeat || 30;            // thermal time constant of the part wall [s]
+    this.airUf = new Float64Array(N);             // local air speed over the film [m/s]
+    this.hcAir = new Float64Array(N).fill(10);    // local air-side heat-transfer coefficient [W/m^2K]
     // work arrays
     this.mu = new Float64Array(N); this.M = new Float64Array(N); this.p = new Float64Array(N);
     this.R = new Float64Array(N); this.Rm = new Float64Array(N); this.D = new Float64Array(N);
@@ -78,12 +80,12 @@ export class FilmSolver {
   volume() {
     let v = 0; const { area } = this.geo;
     for (let k = 0; k < this.geo.N; k++) if (!this.mask[k]) v += (this.h[k] - this.hp) * area[k];
-    return v;
+    return v + this.poolVolume();
   }
   solidsVolume() {
     let v = 0; const { area } = this.geo;
     for (let k = 0; k < this.geo.N; k++) if (!this.mask[k]) v += this.m[k] * area[k];
-    return v;
+    return v + (this.pool ? this.pool[0].M + this.pool[1].M : 0);
   }
 
   // Update gravity projections (body-frame gravity vector g).
@@ -250,6 +252,7 @@ export class FilmSolver {
     const h = this.h;
     if (this.dtCap > 0 && this.dt > this.dtCap) this.dt = this.dtCap;
     if (this.voidList.length) this._applyVoid();
+    this._anyMask1 = false; for (let k = 0; k < N; k++) if (this.mask[k] === 1) { this._anyMask1 = true; break; }
     const vmax = this._rates();
     // CFL for explicit advection: rates do not depend on dt, so just shorten the step
     if (this._minW === undefined) { let mw = ds; for (let k = 0; k < N; k++) if (w[k] < mw) mw = w[k]; this._minW = mw; }
@@ -333,25 +336,39 @@ export class FilmSolver {
       if (m[k] > h[k]) m[k] = h[k];
     }
     this.stats.deposited += dep;
-    this.maskInflow = (this.maskInflow || 0) + Math.max(0, this.maskInflowRate || 0) * dt;
+    // liquid that left the free film into held (plug/bath) cells this step: explicit inflow plus
+    // whatever the implicit correction moved across their faces
+    if (this._anyMask1) {
+      let expect = 0, actual = 0;
+      for (let k = 0; k < N; k++) if (!this.mask[k]) { expect += (R[k] - this.src[k]) * dt * area[k]; actual += (delta[k] - this.src[k] * dt) * area[k]; }
+      this.maskInflow = (this.maskInflow || 0) + (expect - actual) + (this.maskInflowRate || 0) * dt;
+    }
     // evaporation + cure (pointwise)
-    const airU = this.env.airU, uvI = this.env.uv, Tf = this.Tf;
+    const uvI = this.env.uv, Tf = this.Tf, airUf = this.airUf, hc = this.hcAir;
     let evap = 0;
-    // part/film temperature relaxes toward the local air temperature (thermal lag of the wall)
-    const relax = 1 - Math.exp(-dt / Math.max(this.tauHeat, 1e-6));
-    for (let k = 0; k < N; k++) Tf[k] += (this.Tair[k] - Tf[k]) * relax;
     const needEvap = c.evap0 > 0 && c.solids < c.phiMax;
     const ef = this.evapFac;
+    // latent heat of the solvent per m^3 of liquid evaporated [J/m^3]
+    const Lvol = ((c.dHvap * 1000) / ((c.solventM || 18) / 1000)) * 950;
+    const tau = Math.max(this.tauHeat, 1e-6);
     for (let k = 0; k < N; k++) {
-      if (this.mask[k]) continue;
-      if (h[k] > 4 * hp) this.wetted[k] = 1;
-      if (needEvap && h[k] > 2 * hp) {
-        const phi = m[k] / h[k];
-        const E = evaporationRate(c, phi, Tf[k], airU, ef[k]);
-        const floor = Math.max(hp, m[k] / c.phiMax);
-        const dh = Math.min(E * dt, Math.max(0, h[k] - floor));
-        h[k] -= dh; evap += dh * area[k];
+      let qe = 0; // evaporative heat sink [W/m^2]
+      if (!this.mask[k]) {
+        if (h[k] > 4 * hp) this.wetted[k] = 1;
+        if (needEvap && h[k] > 2 * hp) {
+          const phi = m[k] / h[k];
+          const E = evaporationRate(c, phi, Tf[k], airUf[k], ef[k]);
+          const floor = Math.max(hp, m[k] / c.phiMax);
+          const dh = Math.min(E * dt, Math.max(0, h[k] - floor));
+          h[k] -= dh; evap += dh * area[k];
+          qe = (Lvol * dh) / dt;
+        }
       }
+      // part + film temperature: heated by the air with the wall's thermal lag, cooled by
+      // evaporation (a wet film sits near the wet-bulb temperature until it dries)
+      const target = this.Tair[k] - qe / Math.max(hc[k], 1);
+      Tf[k] = (Tf[k] + (dt / tau) * target) / (1 + dt / tau);
+      if (this.mask[k]) continue;
       if (c.cure && c.cure.model !== 'none' && h[k] > 2 * hp) {
         const uvk = this.uvFac ? uvI * this.uvFac[k] : uvI;
         const a = this.alpha[k] + dt * cureRate(c, this.alpha[k], { T: Tf[k], uv: uvk });
@@ -359,6 +376,7 @@ export class FilmSolver {
       }
     }
     this.stats.evaporated += evap;
+    this._lastDt = dt;
     if (this.dripEnabled) this._dripOff();
     if (this.endStrip) this._crossStrip();
     this.t += dt; this.stats.steps++;
@@ -384,11 +402,11 @@ export class FilmSolver {
         const tauOut = side === 0 ? -this.tauS[k] : this.tauS[k];
         // air blowing out of an open end strips liquid once drag beats capillary retention
         let lim = Infinity;
-        // a pendant drop at an open end detaches once it outgrows the capillary length,
-        // or (in a lumen) once it would bridge the bore
-        const hEnd = this.geo.surface === 'inner' ? Math.min(hMax, 0.1 * this.geo.rHyd[i]) : hMax;
-        if (outward > 0.2 * 9.81 || this.gn[k] > 0) lim = hEnd;
-        if (tauOut > 0.05) lim = Math.min(lim, Math.max(5e-6, Math.min(hMax, this.gamma / (200 * tauOut))));
+        // outside surfaces: a pendant drop detaches once it outgrows the capillary length.
+        // (bores are handled by the pool/Tate-volume rule below)
+        if (this.geo.surface !== 'inner' && (outward > 0.2 * 9.81 || this.gn[k] > 0)) lim = hMax;
+        // (inside a bore the air vents past a pool held at the opening; only cross-jets strip it)
+        if (tauOut > 0.05 && this.geo.surface !== 'inner') lim = Math.min(lim, Math.max(5e-6, Math.min(hMax, this.gamma / (200 * tauOut))));
         if (!isFinite(lim)) continue;
         if (this.h[k] > lim) {
           const ex = this.h[k] - lim;
@@ -398,7 +416,70 @@ export class FilmSolver {
         }
       }
     }
+    if (this.geo.surface === 'inner') this._tipPool(this._lastDt || 0);
   }
+
+  // Liquid that drains to an open end of a bore collects there as a pool held by surface
+  // tension (it cannot be represented as a thin film once it is comparable to the bore radius).
+  // The pool keeps its liquid and solids; it drips off only above the drop capillarity can hold
+  // (Tate: V ≈ 0.6 · 2π r γ / (ρ g)); a cross-jet removes it if its dynamic pressure beats the
+  // capillary hold of the opening (~2γ/r); otherwise it dries in place (tip deposit).
+  _tipPool(dt) {
+    const { Ni, Nj, area, s, L, edgeEnd, ds, rHyd } = this.geo;
+    const g = 9.81;
+    if (!this.pool) this.pool = [{ V: 0, M: 0 }, { V: 0, M: 0 }];
+    for (const side of [0, 1]) {
+      const P = this.pool[side];
+      const iEnd = side === 0 ? 0 : Ni - 1;
+      const kRef = iEnd * Nj;
+      const gOut = side === 0 ? -this.gs[kRef] : this.gs[kRef];
+      const r = rHyd[iEnd];
+      const reach = this.poolReach(side);
+      const hCap = 0.25 * r;
+      // liquid beyond hCap in the end region joins the pool (only where gravity pulls toward the end)
+      if (gOut > 0.2 * g) {
+        for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) {
+          const k = i * Nj + j;
+          if (this.mask[k]) continue;
+          const d = side === 0 ? s[i] : (edgeEnd ? edgeEnd[k] : L - s[i]);
+          if (d < 0 || d > reach || this.h[k] <= hCap) continue;
+          const ex = this.h[k] - hCap, frac = this.m[k] / this.h[k];
+          P.V += ex * area[k]; P.M += ex * frac * area[k];
+          this.h[k] = hCap; this.m[k] = hCap * frac;
+        }
+      }
+      if (P.V <= 0) continue;
+      // evaporation from the pool's free surface (about two bore cross-sections)
+      const c = this.coat;
+      if (c.evap0 > 0 && c.solids < c.phiMax) {
+        const phi = P.M / P.V;
+        const E = evaporationRate(c, phi, this.Tf[kRef], this.airUf[kRef], 1);
+        const Afree = 2 * Math.PI * r * r;
+        const dV = Math.min(E * dt * Afree, Math.max(0, P.V - P.M / c.phiMax));
+        P.V -= dV; this.stats.evaporated += dV;
+      }
+      // cross-jet over this opening blows the pool out if it overcomes the capillary hold
+      const es = this.endStrip;
+      if (es && (es.end === 'start') === (side === 0) && es.pDyn > (2 * this.gamma) / r) {
+        this.stats.dripped += P.V; P.V = 0; P.M = 0; continue;
+      }
+      // drips off once larger than the drop capillarity can hold
+      if (gOut > 0.2 * g) {
+        const Vt = (0.6 * 2 * Math.PI * r * this.gamma) / (this.rho * gOut);
+        if (P.V > Vt) { const f = Vt / P.V; this.stats.dripped += P.V - Vt; P.M *= f; P.V = Vt; }
+      }
+    }
+  }
+
+  poolReach(side) {
+    const { Ni, ds } = this.geo;
+    if (side === 0 || !this.geo.hasVoid) return 3 * ds;
+    let maxCut = 0;
+    for (const e of this.geo.endCell) maxCut = Math.max(maxCut, (Ni - 1 - e) * ds);
+    return 3 * ds + maxCut;
+  }
+
+  poolVolume() { return this.pool ? this.pool[0].V + this.pool[1].V : 0; }
 
   // Horizontal cross-jet across an opening strips liquid within `reach` of that end.
   _crossStrip() {

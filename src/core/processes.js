@@ -20,7 +20,7 @@ export const STAGE_DEFAULTS = {
   drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
   fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
   vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  airflow: { duration: 20, nozzleSpeed: 10, airFlowScfh: 0, nozzleDiaMm: 2, captureFrac: 0.5, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
+  airflow: { duration: 20, nozzleSpeed: 10, airFlowScfh: 0, nozzleDiaMm: 2, captureFrac: 0.2, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   dwell: { duration: 60, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
   cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 0, rpm: 0, ambientAir: 0.3 },
 };
@@ -117,6 +117,7 @@ function applyEnv(ctx, st, t0) {
   const fs = ctx.fs;
   fs.env.T = (st.tempC ?? 25) + 273.15;
   if (!ctx._airTField) fs.Tair.fill(fs.env.T);
+  if (!fs._airField) { const U = Math.max(fs.env.airU || 0, st.ambientAir || 0); fs.airUf.fill(U); fs.hcAir.fill(hConv(U)); }
   const omega = ((st.rpm || 0) * 2 * Math.PI) / 60;
   fs.dtCap = 0;
   if (omega > 0) {
@@ -139,7 +140,10 @@ function applyEnv(ctx, st, t0) {
   }
 }
 
-function clearFields(fs) { fs.src.fill(0); fs.tauS.fill(0); fs.tauP.fill(0); fs.env.uv = 0; fs.env.airU = 0; }
+function clearFields(fs) { fs.src.fill(0); fs.tauS.fill(0); fs.tauP.fill(0); fs.env.uv = 0; fs.env.airU = 0; fs._airField = false; }
+
+// natural + forced convection over the part [W/m^2K]
+function hConv(U) { return 8 + 12 * Math.sqrt(Math.max(U, 0)); }
 
 function freshLiquid(ctx, k, h) {
   const fs = ctx.fs, c = ctx.coat;
@@ -225,20 +229,24 @@ STAGES.airflow = {
     if (geo.surface === 'inner') {
       const i0 = dir > 0 ? 0 : geo.Ni - 1;
       const Rin = Math.sqrt(geo.A[i0] * geo.B[i0]);
-      const capture = (st.captureFrac ?? 0.5) * eff * Math.exp(-Math.pow((st.offsetMm * 1e-3) / Rin, 2));
+      const capture = (st.captureFrac ?? 0.2) * eff * Math.exp(-Math.pow((st.offsetMm * 1e-3) / Rin, 2));
       // flow entering the bore; if the bore is blocked the jet's captured dynamic pressure acts on the liquid
       Uin0 = Qnoz > 0 ? Math.min((capture * Qnoz) / geo.crossArea[i0], Unoz) : Unoz * capture;
       airPush = capture * 0.5 * rhoJet * Unoz * Unoz;
+      fs._airField = true;
       for (let i = 0; i < geo.Ni; i++) {
         const U = Math.min((Uin0 * geo.crossArea[i0]) / geo.crossArea[i], 250); // accelerates in a taper
         const tau = airShear(U, 2 * geo.rHyd[i]) * dir;
+        const D = 2 * geo.rHyd[i], Re = (rhoJet * U * D) / AIR_MU;
+        const hcI = Math.max(8, ((Re < 2300 ? 3.66 : 0.023 * Math.pow(Re, 0.8) * Math.pow(0.7, 0.4)) * 0.026) / D);
         airMax = Math.max(airMax, U);
-        for (let j = 0; j < geo.Nj; j++) tauS[i * geo.Nj + j] = tau;
+        for (let j = 0; j < geo.Nj; j++) { const k = i * geo.Nj + j; tauS[k] = tau; fs.airUf[k] = U; fs.hcAir[k] = hcI; }
       }
     } else {
       const U = Unoz * eff * Math.exp(-Math.pow(st.offsetMm / 20, 2));
       airMax = U;
-      for (let k = 0; k < geo.N; k++) tauS[k] = 0.0035 * AIR_RHO * U * U * dir;
+      fs._airField = true;
+      for (let k = 0; k < geo.N; k++) { tauS[k] = 0.0035 * AIR_RHO * U * U * dir; fs.airUf[k] = U; fs.hcAir[k] = hConv(U); }
     }
     // ---- heated air: local air temperature along the part
     ctx._airTField = true;
@@ -268,7 +276,7 @@ STAGES.airflow = {
     if ((st.crossJetSpeed || 0) > 0 && st.crossJetEnd && st.crossJetEnd !== 'none') {
       const reach = Math.max((st.crossJetReachMm ?? 1.5) * 1e-3, geo.ds);
       const tauX = 0.0035 * AIR_RHO * st.crossJetSpeed * st.crossJetSpeed;
-      fs.endStrip = { end: st.crossJetEnd, reach, lim: Math.max(2e-6, fs.gamma / (200 * Math.max(tauX, 1e-6))) };
+      fs.endStrip = { end: st.crossJetEnd, reach, pDyn: 0.5 * AIR_RHO * st.crossJetSpeed * st.crossJetSpeed, lim: Math.max(2e-6, fs.gamma / (200 * Math.max(tauX, 1e-6))) };
       const mis = Math.abs(Math.sin(((st.crossJetAngleDeg || 0) * Math.PI) / 180));
       if (mis > 0) {
         const sign = st.crossJetEnd === 'end' ? 1 : -1;
@@ -310,11 +318,26 @@ function managePlug(ctx, st) {
   const plug = ctx.plug;
   if (!plug) return;
   // liquid draining into the plug from the film joins it
-  plug.V += fs.maskInflow || 0; fs.maskInflow = 0;
+  plug.V = Math.max(0, plug.V + (fs.maskInflow || 0)); fs.maskInflow = 0;
   if (plug.V < 1e-13) { plug.done = true; }
   const before = plug.exited;
   if (!plug.done) plugStep(ctx, plug, fs.dt, (p, len) => (air.p > 0 ? air.p * (air.dir === p.dir ? 1 : -1) : 0) + ctx.coat.rho * gS * len * p.dir);
-  fs.stats.dripped += Math.max(0, plug.exited - before);
+  // liquid leaving the bore: blown out by the air if it beats the capillary hold of the
+  // opening, otherwise it gathers in the pool held at that opening
+  const exitSide = plug.dir > 0 ? 1 : 0;
+  const rExit = geo.rHyd[exitSide ? geo.Ni - 1 : 0];
+  const forced = air.p * (air.dir === plug.dir ? 1 : 0) > (2 * fs.gamma) / rExit;
+  const out = Math.max(0, plug.exited - before);
+  const sf0 = plug.front();
+  const atExit = plug.dir > 0 ? sf0 >= geo.L - 1e-9 : sf0 <= 1e-9;
+  let toPool = forced ? 0 : out;
+  if (!forced && atExit && !plug.done && plug.V < 0.6 * geo.crossArea[exitSide ? geo.Ni - 1 : 0] * fs.poolReach(exitSide)) { toPool += plug.V; plug.V = 0; plug.done = true; }
+  if (toPool > 0) {
+    if (!fs.pool) fs.pool = [{ V: 0, M: 0 }, { V: 0, M: 0 }];
+    fs.pool[exitSide].V += toPool; fs.pool[exitSide].M += toPool * ctx.coat.solids;
+  }
+  fs.stats.dripped += forced ? out : 0;
+  if (plug.done && !forced) { for (let k = 0; k < geo.N; k++) if (fs.mask[k] === 1) fs.mask[k] = 0; }
   if (plug.done) { ctx.plug = null; ctx.trapped = null; return; }
   sweepIntoPlug(ctx, plug);
   const sf = plug.front();
@@ -351,6 +374,10 @@ function detectBridge(ctx, air, gS) {
   // liquid filling ~45 % of the cross-section (film ≳ 0.25 R) snaps
   // into a plug (Plateau–Rayleigh in a tube); the last cells at each open end are left to drip-off
   for (let i = 1; i < Ni - 2; i++) {
+    // a pool lying in an open bevel cannot seal the bore
+    let open = false;
+    for (let j = 0; j < Nj && !open; j++) if (geo.voidMask[i * Nj + j] || geo.edgeEnd[i * Nj + j] < 2 * geo.ds) open = true;
+    if (open) { if (i0 >= 0) break; continue; }
     let v = 0;
     for (let j = 0; j < Nj; j++) { const k = i * Nj + j; if (!fs.mask[k]) v += (fs.h[k] - fs.hp) * geo.w[k]; }
     if (v > 0.45 * geo.crossArea[i]) { if (i0 < 0) i0 = i; i1 = i; } else if (i0 >= 0) break;
@@ -364,6 +391,11 @@ function detectBridge(ctx, air, gS) {
     V += Math.max(0, fs.h[k] - 4 * fs.hp) * geo.area[k];
   }
   if (V < 0.5 * geo.crossArea[i0] * geo.ds) return;
+  // the bridged liquid now belongs to the plug
+  for (let i = lo; i <= hi; i++) for (let j = 0; j < Nj; j++) {
+    const k = i * Nj + j; if (fs.mask[k]) continue;
+    if (fs.h[k] > 4 * fs.hp) { const frac = fs.m[k] / fs.h[k]; fs.h[k] = 4 * fs.hp; fs.m[k] = fs.h[k] * frac; }
+  }
   const dir = air.p > 0 ? air.dir : gS >= 0 ? 1 : -1;
   const a = geo.s[lo] - 0.5 * geo.ds, b = geo.s[hi] + 0.5 * geo.ds;
   const plug = new Plug(ctx, dir > 0 ? a : b, dir, V);
@@ -484,7 +516,9 @@ STAGES.drip = {
     if (tot <= 0) return;
     for (let k = 0; k < geo.N; k++) {
       if (!wts[k]) continue;
-      const dh = (V * wts[k]) / tot / geo.area[k];
+      const dV = (V * wts[k]) / tot;
+      if (fs.mask[k] === 1 && ctx.plug && !ctx.plug.done) { ctx.plug.V += dV; continue; } // lands in a liquid plug
+      const dh = dV / geo.area[k];
       fs.h[k] += dh; fs.m[k] += dh * ctx.coat.solids;
     }
     fs.stats.deposited += V;
@@ -566,6 +600,8 @@ function plugStep(ctx, plug, dt, drive) {
       for (let i = i0; i !== i1; i += step) {
         for (let j = 0; j < geo.Nj; j++) {
           const k = i * geo.Nj + j;
+          if (fs.mask[k] === 2) continue;
+          if (fs.mask[k] === 0) plug.V += fs.h[k] * geo.area[k]; // film already there joins the plug
           fs.mask[k] = 0; freshLiquid(ctx, k, hB); used += fs.h[k] * geo.area[k];
         }
       }
@@ -590,8 +626,12 @@ function plugStep(ctx, plug, dt, drive) {
     const inside = !plug.done && geo.s[i] >= a && geo.s[i] <= b;
     for (let j = 0; j < geo.Nj; j++) {
       const k = i * geo.Nj + j;
-      if (inside) { if (fs.mask[k] === 2) continue; fs.mask[k] = 1; fs.hFix[k] = hFix; fs.h[k] = hFix; fs.m[k] = hFix * ctx.coat.solids; fs.alpha[k] = 0; }
-      else if (fs.mask[k] === 1) { fs.mask[k] = 0; }
+      if (inside) {
+        if (fs.mask[k] === 2) continue;
+        // a cell newly covered by the plug: its film joins the plug
+        if (fs.mask[k] === 0) plug.V += fs.h[k] * geo.area[k];
+        fs.mask[k] = 1; fs.hFix[k] = hFix; fs.h[k] = hFix; fs.m[k] = hFix * ctx.coat.solids; fs.alpha[k] = 0;
+      } else if (fs.mask[k] === 1) { fs.mask[k] = 0; plug.V -= fs.h[k] * geo.area[k]; } // film left where the plug withdrew
     }
   }
 }
@@ -844,7 +884,7 @@ export function frameOf(ctx, stIndex, label) {
   return {
     t: fs.t, stage: stIndex, label,
     h: Float32Array.from(fs.h), m: Float32Array.from(fs.m), alpha: Float32Array.from(fs.alpha),
-    mask: Uint8Array.from(fs.mask), T: Float32Array.from(fs.Tf), aux: { ...(ctx.aux || {}) },
+    mask: Uint8Array.from(fs.mask), T: Float32Array.from(fs.Tf), aux: { ...(ctx.aux || {}), pool: fs.pool ? [fs.pool[0].V, fs.pool[1].V] : [0, 0] },
   };
 }
 
@@ -929,6 +969,22 @@ export function simulate(spec, cb = {}) {
     doneEst += est[si];
     if (cb.onProgress) cb.onProgress(doneEst / totalEst, `${st.label || st.type} complete`);
   }
+  if (fs.pool && geo.surface === 'inner') {
+    for (const side of [0, 1]) {
+      const P = fs.pool[side];
+      if (P.V < 1e-12) continue;
+      // the pool dries where it sits: spread its liquid and solids over the end region
+      const reach = fs.poolReach(side);
+      let A = 0; const cells = [];
+      for (let k = 0; k < geo.N; k++) { const i = Math.floor(k / geo.Nj); const d = side === 0 ? geo.s[i] : geo.edgeEnd[k]; if (d >= 0 && d <= reach && !fs.mask[k]) { cells.push(k); A += geo.area[k]; } }
+      if (!(A > 0)) { P.V = 0; P.M = 0; continue; }
+      const eq = (P.M / A) * 1e6;
+      ctx.poolReport = { side, uL: P.V * 1e9, dryUm: eq, reachMm: reach * 1e3, jet: Math.sqrt((4 * fs.gamma) / (AIR_RHO * geo.rHyd[side ? geo.Ni - 1 : 0])) };
+      ctx.warnings.push(`About ${(P.V * 1e9).toFixed(2)} µL of coating is pooled at the ${side === 1 ? 'tip' : 'top'} opening at the end of the process (held by surface tension; it dries to a thick deposit of ~${eq.toFixed(1)} µm dry over the last ${(reach * 1e3).toFixed(1)} mm). Horizontal jets above ~${Math.sqrt((4 * fs.gamma) / (AIR_RHO * geo.rHyd[side ? geo.Ni - 1 : 0])).toFixed(0)} m/s at that opening would blow it out.`);
+      for (const k of cells) { fs.h[k] += P.V / A; fs.m[k] += P.M / A; }
+      P.V = 0; P.M = 0;
+    }
+  }
   if (ctx.plug && !ctx.plug.done) {
     const t = ctx.trapped;
     ctx.warnings.push(`A liquid plug (${(ctx.plug.V * 1e9).toFixed(1)} µL) is still held in the bore between s = ${(t.a * 1e3).toFixed(1)} and ${(t.b * 1e3).toFixed(1)} mm at the end of the process. Stronger air (higher flow or capture) or a vacuum step would clear it.`);
@@ -966,6 +1022,7 @@ export function serialiseGeometry(geo) {
     Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic,
     s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B),
     area: Float32Array.from(geo.area), pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm),
-    voidMask: Uint8Array.from(geo.voidMask || new Uint8Array(geo.N)),
+    voidMask: Uint8Array.from(geo.voidMask || new Uint8Array(geo.N)), edgeEnd: Float32Array.from(geo.edgeEnd || new Float64Array(geo.N)),
+    poolReach: [3 * geo.ds, 3 * geo.ds + (geo.hasVoid ? Math.max(...Array.from(geo.endCell, (e) => (geo.Ni - 1 - e) * geo.ds)) : 0)],
   };
 }

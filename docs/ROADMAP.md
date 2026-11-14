@@ -38,7 +38,14 @@ Findings: fill/dwell/withdraw coats 100% of the bore (vs ~37% for a single pumpe
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
 
-Finding (wall excess after draining): the drained cartridge still carries ~34 µL (65–105 µm wet) on its walls. Under 60 °C HACS air ~70% of it dries in place within ~1 min, and ~7 µL is pushed down and blown off at the bevel. Levers on the dry film: withdraw rate (10 vs 20 µL/s → −25%), air flow (60 vs 30 SCFH → −14%); a 60 s unheated pre-blow changes little (−4%) for 300 mPa·s HA.
+## Done (v0.5) — wall excess and tip pooling (owner observation)
+- [x] Wall excess drains to the tip and pools, held by surface tension (won't drain on its own); bevel jets blow it out above ~2γ/r dynamic pressure (~16 m/s for this tip); otherwise it dries as a tip deposit
+- [x] Evaporative cooling (wet film near wet-bulb in hot air) and local air speed / heat transfer per cell
+- [x] Plug and fill volume bookkeeping made exactly conservative (incl. implicit fluxes into held cells)
+
+Findings: with HACS at 20 m/s bevel jets the tip pool is cleared; the oven route keeps draining after the blow-off and pools ~3.5 µL at the tip (≈80 µm dry deposit). Evaporative cooling delays heating of the wet film, so cure after 10 min at 60 °C is ~72%.
+
+Earlier finding (wall excess after draining, before evaporative cooling): the drained cartridge still carries ~34 µL (65–105 µm wet) on its walls. Under 60 °C HACS air ~70% of it dries in place within ~1 min, and ~7 µL is pushed down and blown off at the bevel. Levers on the dry film: withdraw rate (10 vs 20 µL/s → −25%), air flow (60 vs 30 SCFH → −14%); a 60 s unheated pre-blow changes little (−4%) for 300 mPa·s HA.
 - [ ] Calibrate the HA preset against a measured SAICCS cartridge (coating volume, dry thickness, coverage, cure time)
 - [ ] Withdrawal speed profiles for dip coating (ramps and multi-step) to counter drainage gradients
 - [ ] Simultaneous inner + outer surface run (both walls of a tube in one simulation)

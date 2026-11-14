@@ -24,7 +24,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 - **3D view** of the part coloured by dry or wet film thickness, solids fraction, cure or contact angle. It has a lumen cutaway, film-thickness exaggeration, process markers (bath level, applicator, meniscus), and playback through every stage.
 - **Unwrapped surface map** (axial position × circumferential angle) with hover readout.
 - **Profiles** along and around the part, and **time histories** of thickness, cure, viscosity and film volume.
-- **Automatic findings:** incomplete coverage, dewetting, axial gradients and sag, circumferential sag, Rayleigh–Plateau beading, edge beads, under-cure, residual solvent and solvent entrapment, and trapped liquid in lumens. Each comes with a suggested remedy.
+- **Automatic findings:** incomplete coverage, coating pooled at the tip, axial gradients and sag, circumferential sag, Rayleigh–Plateau beading, edge beads, under-cure, residual solvent and solvent entrapment, and trapped liquid in lumens. Each comes with a suggested remedy.
 - **Analytic cross-checks** (LLD and Bretherton predictions), dimensionless groups (Bond number, capillary length, capillary rise) and a mass balance.
 - **Parameter sweeps:** vary any stage, coating, geometry or substrate parameter and chart thickness, uniformity and coverage.
 - **Save and load** setups, shareable links, and CSV/JSON/PNG export.
@@ -39,7 +39,7 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 
 ## Verification
 
-`npm test` runs 23 checks against analytic results, including:
+`npm test` runs 24 checks against analytic results, including:
 
 - capillary levelling decay rate (linear theory, within 0.5%)
 - Jeffreys gravity drainage (within ~4%)
@@ -57,6 +57,7 @@ The coated surface is unwrapped into an (s, φ) grid that follows the part's rea
 - bevel geometry mass conservation
 - plug formation in a narrow bore and clearing by air
 - fill/dwell/withdraw film versus Bretherton at the pump-set meniscus speed
+- tip pool held by surface tension and blown out by bevel jets above the capillary hold, with volume conserved
 
 `npm run presets` runs every preset headlessly, and `npm run ui-test` drives the built app in headless Chromium.
 

@@ -15,7 +15,7 @@ export const PRESETS = [
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
       { type: 'fill', label: 'Fill, dwell & withdraw', fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, airTime: 2, tilt: 0 },
-      { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tilt: 0 },
+      { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.2, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tilt: 0 },
       { type: 'dwell', label: 'Cool down', duration: 60, tilt: 0 },
     ],
     metrics: { zone: [1, 34] },
@@ -29,7 +29,7 @@ export const PRESETS = [
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
       { type: 'fill', label: 'Fill, dwell & withdraw', fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, airTime: 2, tilt: 0 },
-      { type: 'airflow', label: 'Air purge + bevel blow-off', duration: 30, airFlowScfh: 30, airTempC: 25, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
+      { type: 'airflow', label: 'Air purge + bevel blow-off', duration: 30, airFlowScfh: 30, airTempC: 25, nozzleDiaMm: 2, captureFrac: 0.2, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
       { type: 'cure', label: 'Oven cure 80 °C', mode: 'thermal', duration: 900, tempC: 80, tilt: 0, ambientAir: 0.5 },
     ],
     metrics: { zone: [1, 34] },
@@ -43,7 +43,7 @@ export const PRESETS = [
     stages: [
       { type: 'plasma', label: 'Plasma activation', duration: 20, power: 1, penetrationMm: 10, fromEnd: 'both', holdMinutes: 1, tilt: 0 },
       { type: 'drip', label: 'Pump dispense (proximal end)', mode: 'pump', startMm: 1.5, pumpUlS: 5, pumpVolumeUl: 12, lines: 1, tilt: 0, drainAfter: 20 },
-      { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.5, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
+      { type: 'airflow', label: 'HACS: heated air + bevel blow-off', duration: 600, airFlowScfh: 30, airTempC: 60, nozzleDiaMm: 2, captureFrac: 0.2, fromEnd: 'start', crossJetSpeed: 20, crossJetEnd: 'end', crossJetReachMm: 1.5, tilt: 0 },
     ],
     metrics: { zone: [1, 34] },
   },
