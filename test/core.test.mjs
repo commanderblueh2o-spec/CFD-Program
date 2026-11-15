@@ -1,6 +1,6 @@
 import { test, assert, near, run } from './harness.mjs';
 import { PentaSolver, solveDense } from '../src/core/linalg.js';
-import { buildGeometry } from '../src/core/geometry.js';
+import { buildGeometry, parseProfileCSV, profileToCSV } from '../src/core/geometry.js';
 import { FilmSolver } from '../src/core/film.js';
 import { COATINGS, SUBSTRATES, contactAngleOWRK } from '../src/core/materials.js';
 import { levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength, dipSpeedAt, dipWithdrawTable, dipPositionAt } from '../src/core/physics.js';
@@ -143,6 +143,48 @@ test('cylinder outer film shows Rayleigh–Plateau beading (thin fibre)', () => 
   for (let k = 0; k < geo.N; k++) { mx = Math.max(mx, fs.h[k]); mn = Math.min(mn, fs.h[k]); }
   assert(mx / mn > 2, 'expected beads to grow, max/min=' + (mx / mn).toFixed(2));
   return `max/min thickness ${(mx / mn).toFixed(1)}`;
+});
+
+test('CSV profile import: headers, units, delimiters and a frustum bore volume', () => {
+  // Diameters in µm with a header, measured from the tip (descending), semicolon + decimal comma
+  const eu = 'Position (mm);Diameter (µm)\n30;1600\n20,0;1600\n10;4000\n0;4000\n';
+  const a = parseProfileCSV(eu);
+  assert(a.points.length === 4 && a.kind === 'full', 'four full-size points');
+  near(a.points[0][1], 2.0, 1e-9, 'r at s=0 (µm diameter → mm radius)');
+  near(a.points[3][2], 0.8, 1e-9, 'r at tip');
+  // No header: s, half-width, half-height in mm (same as the text box); comments, blanks, tabs
+  const b = parseProfileCSV('# bore\n5\t2.8\t2.0\n\n17\t1.05\t0.85\n27\t0.85\t0.68\n');
+  near(b.points[0][0], 0, 1e-12, 'shifted to s=0'); near(b.length, 22, 1e-12, 'length');
+  assert(b.notes.some((n) => /Shifted/.test(n)), 'shift noted');
+  // Header synonyms: width/height in inches → halved and scaled
+  const c = parseProfileCSV('z_in, width_in, height_in\n0, 0.2, 0.1\n1, 0.1, 0.05\n');
+  near(c.points[1][0], 25.4, 1e-9, 'inch position'); near(c.points[0][1], 2.54, 1e-9, 'half width'); near(c.points[0][2], 1.27, 1e-9, 'half height');
+  // radius column; flip
+  const d = parseProfileCSV('s,r\n0,0.5\n10,1.5\n', { flip: true });
+  near(d.points[0][1], 1.5, 1e-12, 'flipped: wide end first');
+  // Round trip
+  const e = parseProfileCSV(profileToCSV(b.points));
+  assert(JSON.stringify(e.points) === JSON.stringify(b.points), 'round trip');
+  // Errors
+  let threw = 0;
+  for (const bad of ['', 's,d\n0,1\n', 's,d\n0,1\n5,-1\n', 's (m),d (m)\n0,0.002\n0.3,0.002\n10,0.002\n']) { try { parseProfileCSV(bad); } catch { threw++; } }
+  assert(threw === 4, 'invalid profiles rejected, got ' + threw);
+  // Frustum: lumen volume from the built grid matches pi L/3 (r1^2 + r1 r2 + r2^2)
+  const L = 20, r1 = 1.5, r2 = 0.6;
+  const fr = parseProfileCSV(`s_mm,diameter_mm\n0,${2 * r1}\n${L},${2 * r2}\n`);
+  const geo = buildGeometry({ geometry: { type: 'custom', points: fr.points }, surface: 'inner', grid: { ns: 200, nphi: 24 } });
+  let V = 0; for (let i = 0; i < geo.Ni; i++) V += geo.crossArea[i] * geo.ds;
+  const Vref = Math.PI * L / 3 * (r1 * r1 + r1 * r2 + r2 * r2) * 1e-9;
+  near(V, Vref, 1e-4, 'frustum volume');
+  // Dense noisy measurement → averaged down, volume kept
+  let txt = 's,d\n'; const rng = rnd(7);
+  for (let i = 0; i <= 4000; i++) { const s = L * i / 4000; txt += `${s},${2 * (r1 + (r2 - r1) * s / L) + 0.01 * (rng() - 0.5)}\n`; }
+  const dn = parseProfileCSV(txt);
+  assert(dn.points.length <= 240, 'decimated to ' + dn.points.length);
+  const g2 = buildGeometry({ geometry: { type: 'custom', points: dn.points }, surface: 'inner', grid: { ns: 200, nphi: 24 } });
+  let V2 = 0; for (let i = 0; i < g2.Ni; i++) V2 += g2.crossArea[i] * g2.ds;
+  near(V2, Vref, 2e-3, 'noisy frustum volume');
+  return `frustum ${(V * 1e9).toFixed(3)} µL vs ${(Vref * 1e9).toFixed(3)}; 4001 noisy points → ${dn.points.length}`;
 });
 
 run();

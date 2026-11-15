@@ -31,7 +31,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 
 ## Geometries and materials
 
-Catheter or tube (optional tapered tip, ovality and bevel), IOL cartridge (loading chamber → taper → nozzle with a bevelled tip, elliptical sections), a custom axial profile, and a flat coupon. The substrate library covers PP, PC, PE, PTFE, FEP, Pebax, TPU, nylon, silicone, PVC, PEEK, stainless steel, nitinol and glass. The coating library covers hydrophilic HA (hyaluronic acid, aqueous, thermal crosslink), hydrophilic PVP (aqueous and IPA, UV), silicone dispersion and oils, PTFE dispersion, PU solution, UV acrylate, heparin solution and water. Every property can be edited.
+Catheter or tube (optional tapered tip, ovality and bevel), IOL cartridge (loading chamber → taper → nozzle with a bevelled tip, elliptical sections), a custom axial profile (typed in or imported from a CSV of measured positions and diameters, radii or width/height, with units read from the header), and a flat coupon. The substrate library covers PP, PC, PE, PTFE, FEP, Pebax, TPU, nylon, silicone, PVC, PEEK, stainless steel, nitinol and glass. The coating library covers hydrophilic HA (hyaluronic acid, aqueous, thermal crosslink), hydrophilic PVP (aqueous and IPA, UV), silicone dispersion and oils, PTFE dispersion, PU solution, UV acrylate, heparin solution and water. Every property can be edited.
 
 ## The physics in one paragraph
 

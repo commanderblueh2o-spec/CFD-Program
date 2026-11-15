@@ -15,6 +15,20 @@ const spec = await p.evaluate(() => JSON.parse(localStorage.getItem('coatsim.spe
 const ok1 = spec.stages[0].speed > 10 && !('true' in spec.stages[0]);
 const ok2 = spec.coatingOverrides && spec.coatingOverrides.mu0 < 0.01;
 console.log(`stage speed -> ${spec.stages[0].speed} mm/s ${ok1 ? 'OK' : 'FAIL'}; coating viscosity -> ${spec.coatingOverrides?.mu0} Pa·s ${ok2 ? 'OK' : 'FAIL'}`);
+// Bore profile CSV import on a SAICCS cartridge: switches to a custom profile, keeps bevel + evaluation zone
+await p.selectOption('#preset', 'saiccs_ha_heated');
+await p.locator('.profio input[type=file]').setInputFiles({ name: 'bore.csv', mimeType: 'text/csv', buffer: Buffer.from('# descending positions, inches\nz (in),ID (in)\n1.4,0.06\n1.0,0.08\n0.5,0.2\n0,0.22\n') });
+await p.waitForTimeout(300);
+const g = await p.evaluate(() => JSON.parse(localStorage.getItem('coatsim.spec')));
+const pts = g.geometry.points || [];
+const ok3 = g.geometry.type === 'custom' && pts.length === 4 && Math.abs(pts[0][1] - 2.794) < 1e-6 && Math.abs(pts[3][0] - 35.56) < 1e-6
+  && g.geometry.tipBevelDeg === 45 && g.metrics.zone && g.metrics.zone[1] <= 35.56;
+console.log(`profile import -> ${g.geometry.type}, ${pts.length} pts, r0 ${pts[0]?.[1]} mm, L ${pts[pts.length - 1]?.[0]} mm, zone ${g.metrics.zone} ${ok3 ? 'OK' : 'FAIL'}`);
+// Bad file: rejected with an error toast, geometry unchanged
+await p.locator('.profio input[type=file]').setInputFiles({ name: 'bad.csv', mimeType: 'text/csv', buffer: Buffer.from('s,d\n0,1\n') });
+await p.waitForTimeout(300);
+const ok4 = (await p.textContent('#toast')).includes('Could not import') && (await p.evaluate(() => JSON.parse(localStorage.getItem('coatsim.spec')).geometry.points.length)) === 4;
+console.log(`bad profile rejected ${ok4 ? 'OK' : 'FAIL'}`);
 console.log('errors:', errors.length ? errors : 'none');
 await b.close();
-if (!ok1 || !ok2 || errors.length) process.exit(1);
+if (!ok1 || !ok2 || !ok3 || !ok4 || errors.length) process.exit(1);

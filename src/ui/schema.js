@@ -38,8 +38,12 @@ export const GEOMETRY_SCHEMAS = {
   },
   custom: {
     name: 'Custom profile',
-    fields: [f('wall', 'Wall thickness', 'mm', 0, 5, 0.05, 'Added to the profile for the outer surface.')],
-    defaults: { wall: 0.3, points: [[0, 1.5, 1.5], [10, 1.5, 1.5], [20, 0.8, 0.7], [30, 0.8, 0.7]] },
+    fields: [
+      f('wall', 'Wall thickness', 'mm', 0, 5, 0.05, 'Added to the profile for the outer surface.'),
+      f('tipBevelDeg', 'Tip bevel angle', '°', 0, 70, 1, 'Angle of the bevel cut at the distal end (0 = square cut).'),
+      f('bevelClockDeg', 'Bevel orientation', '°', 0, 360, 1, 'Which side of the tip is the long side of the bevel.'),
+    ],
+    defaults: { wall: 0.3, tipBevelDeg: 0, bevelClockDeg: 270, points: [[0, 1.5, 1.5], [10, 1.5, 1.5], [20, 0.8, 0.7], [30, 0.8, 0.7]] },
     hasPoints: true,
   },
   coupon: {

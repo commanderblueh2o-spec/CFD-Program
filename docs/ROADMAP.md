@@ -41,6 +41,13 @@ Findings: fill/dwell/withdraw coats 100% of the bore (vs ~37% for a single pumpe
 Findings: a profile only helps when the film drains before it sets. For PU/THF on a 20 mm coupon a gentle 2.5→0.6 mm/s ramp cuts the CoV from 31% to 24%. Too steep a slow-down (4→0.4 mm/s) lets the thick upper film drain onto the thin lower one and form a drainage front, so the bottom ends up thicker than at constant speed. Fast-setting coatings (silicone dispersion) and long-draining non-volatile oils (Jeffreys regime, independent of the deposit) gain nothing; for these a constant speed is best.
 Robustness note: `catheter_lumen_dip` is chaotically sensitive to tiny changes (speed 2 vs 2.001 mm/s → CoV 72% vs 55%), from the lumen column draining to and pooling at the tip. Results for that preset should be read as a range.
 
+## Done (v0.7) — measured profile import
+- [x] Import an axial profile from CSV (e.g. a measured cartridge bore): comma/semicolon (decimal comma)/tab/space separated; header picks columns (position; diameter/ID, radius, or width/height) and units (mm, µm, cm, in); descending or tip-first data, repeated stations averaged, dense scans bin-averaged to ≤240 stations; unit sanity checks. Importing keeps the tip bevel and the evaluation zone so SAICCS jets and statistics still apply; Export writes the profile back as CSV. Custom profiles now take a tip bevel too.
+- [x] Verified: frustum bore volume from the grid matches πL(r₁²+r₁r₂+r₂²)/3 to 1e-4, also from 4001 noisy points; a CSV replica of the SAICCS cartridge reproduces the built-in preset exactly (1.269 µm, CoV 37%, 100% coverage), with or without ±2 µm measurement noise
+- [x] Fixed the "Press Run" placeholder in the empty results panel (text was split into flex columns)
+
+Finding: resetting the evaluation zone on import counts the tip pool deposit and inflates the CoV from 37% to 101% for the same cartridge, so the zone matters as much as the geometry when comparing a measured part with a preset.
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
@@ -62,5 +69,4 @@ Earlier finding (wall excess after draining, before evaporative cooling): the dr
 - [ ] Calibration helper: fit viscosity or evaporation rate to a measured dry thickness
 - [ ] Moisture-cure kinetics (RTV silicones), oxygen inhibition for UV acrylates
 - [ ] Performance: typed-array kernels, optional multi-worker sweeps
-- [ ] Import an axial profile from CSV (e.g. measured cartridge bore)
 - [ ] Printable PDF run report

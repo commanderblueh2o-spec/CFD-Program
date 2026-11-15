@@ -1,7 +1,7 @@
 // CoatSim application controller.
 import { PRESETS, getPreset } from '../core/presets.js';
 import { SUBSTRATES, COATINGS, contactAngleOWRK, wenzel, resolveCoating, resolveSubstrate } from '../core/materials.js';
-import { buildGeometry } from '../core/geometry.js';
+import { buildGeometry, parseProfileCSV, profileToCSV } from '../core/geometry.js';
 import { capillaryLength } from '../core/physics.js';
 import { GEOMETRY_SCHEMAS, STAGE_SCHEMAS, SUBSTRATE_OVERRIDES, FIELDS } from './schema.js';
 import { STAGE_DEFAULTS } from '../core/processes.js';
@@ -117,16 +117,63 @@ function renderGeometry() {
   const dims = el('details', { class: 'adv' }); dims.append(el('summary', {}, 'Dimensions'));
   for (const d of sch.fields) dims.append(numberRow(d, g[d.key] ?? sch.defaults[d.key], (v) => { g[d.key] = v; changed(); previewGeometry(); }));
   if (sch.hasPoints) {
-    dims.append(el('div', { class: 'hint' }, 'Bore profile, one point per line: <code>s, half-width, half-height</code> (mm).'));
+    dims.append(el('div', { class: 'hint' }, 'Bore profile, one point per line: <code>s, half-width, half-height</code> (mm). CSV with a header also works.'));
     const ta = el('textarea', { class: 'pts', rows: 5 });
     ta.value = (g.points || []).map((p) => p.join(', ')).join('\n');
     ta.addEventListener('change', () => {
-      const pts = ta.value.split('\n').map((l) => l.split(/[,\s]+/).filter(Boolean).map(Number)).filter((p) => p.length >= 3 && p.every(isFinite));
-      if (pts.length >= 2) { g.points = pts; changed(); previewGeometry(); } else toast('Need at least two valid points', true);
+      try { const r = parseProfileCSV(ta.value, { dims: /[a-z]/i.test(ta.value) ? 'auto' : 'half' }); g.points = r.points; ta.value = r.points.map((p) => p.join(', ')).join('\n'); changed(); previewGeometry(); }
+      catch (err) { toast(err.message, true); }
     });
     dims.append(ta);
   }
   box.append(dims);
+  if (g.type !== 'coupon') box.append(profileImportRow(g));
+}
+
+// Import a measured axial profile (CSV) — switches the part to a custom profile, keeping the
+// wall thickness and any tip bevel so SAICCS jets still line up.
+function profileImportRow(g) {
+  const wrap = el('div', { class: 'profio' });
+  const head = el('div', { class: 'profhead' });
+  const outer = (state.spec.surface || 'outer') === 'outer';
+  head.append(el('label', { title: `Load a measured ${outer ? 'outer' : 'bore'} profile from a CSV file: position plus diameter, radius or width/height columns. Units in the header (mm, µm, in) are converted.` }, outer ? 'Measured profile' : 'Bore profile'));
+  const ctl = el('div', { class: 'profctl' });
+  const sizes = el('select', { class: 'small', title: 'How to read the size columns when the header does not say (or there is no header).' });
+  for (const [v, t] of [['auto', 'Sizes: from header'], ['full', 'Sizes: diameters'], ['half', 'Sizes: radii']]) sizes.append(el('option', { value: v }, t));
+  const flipL = el('label', { class: 'chk', title: 'Tick if position 0 in the file is the tip; CoatSim puts s = 0 at the wide proximal end.' });
+  const flip = el('input', { type: 'checkbox' }); flipL.append(flip, document.createTextNode(' from tip'));
+  const imp = el('button', { class: 'btn small', type: 'button' }, 'Import CSV…');
+  const inp = el('input', { type: 'file', accept: '.csv,.tsv,.txt,text/csv,text/plain', hidden: '' });
+  imp.addEventListener('click', () => inp.click());
+  inp.addEventListener('change', async () => {
+    const f = inp.files[0]; if (!f) return;
+    try {
+      const r = parseProfileCSV(await f.text(), { dims: sizes.value, flip: flip.checked });
+      // The custom profile is the bore; the outer surface adds the wall. A file loaded while the
+      // outside is coated describes that outer surface, so it is used as-is (wall 0).
+      const outer = (state.spec.surface || 'outer') === 'outer';
+      const keep = { wall: outer ? 0 : (g.wall ?? GEOMETRY_SCHEMAS.custom.defaults.wall), tipBevelDeg: g.tipBevelDeg || 0, bevelClockDeg: g.bevelClockDeg ?? 270 };
+      if (outer) r.notes.push('used as the outer surface (wall 0)');
+      state.spec.geometry = { type: 'custom', ...keep, points: r.points, source: f.name };
+      // keep the evaluation zone (e.g. excluding the tip) when it still fits the new part
+      const z = state.spec.metrics?.zone;
+      state.spec.metrics = { ...(state.spec.metrics || {}), zone: z && z[0] < r.length - 0.5 ? [z[0], Math.min(z[1], r.length)] : null };
+      renderGeometry(); renderAdvanced(); changed(); previewGeometry();
+      toast(`Imported ${r.points.length} points, ${fmt(r.length)} mm` + (r.notes.length ? ' — ' + r.notes.join('; ') : ''));
+    } catch (err) { toast('Could not import profile: ' + err.message, true); }
+    inp.value = '';
+  });
+  const btns = el('div', { class: 'profctl', style: 'margin:0' });
+  btns.append(imp, inp);
+  ctl.append(sizes, flipL);
+  if (g.type === 'custom') {
+    const exp = el('button', { class: 'btn small', type: 'button', title: 'Download this profile as CSV' }, 'Export');
+    exp.addEventListener('click', () => download((g.source || 'profile').replace(/\.[^.]+$/, '') + '.csv', profileToCSV(g.points || []), 'text/csv'));
+    btns.append(exp);
+  }
+  head.append(btns);
+  wrap.append(head, ctl);
+  return wrap;
 }
 
 function partLength() { try { return buildGeometry({ ...state.spec, grid: { ns: 4, nphi: 8 } }).L * 1e3; } catch { return 0; } }
