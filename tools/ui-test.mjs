@@ -33,6 +33,13 @@ for (const [n, frac] of [[1, 0.22], [2, 0.3], [3, 0.6], [4, 1]]) {
 for (const [i, tab] of ['map', 'charts'].entries()) {
   await page.click(`#tabs button[data-tab=${tab}]`); await page.waitForTimeout(500);
   await page.screenshot({ path: `${out}/${i + 2}-${tab}.png` });
+  if (tab === 'map') {
+    // hover the middle of the map: the tooltip should describe the coating state there
+    const box = await page.locator('#mapInner canvas').first().boundingBox();
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await page.waitForTimeout(150);
+    console.log('map hover:', (await page.locator('#mapInner .chart-tip').textContent()).trim());
+  }
 }
 await page.click('#tabs button[data-tab=v3d]');
 await page.click('.stage-head');

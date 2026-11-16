@@ -48,6 +48,13 @@ Robustness note: `catheter_lumen_dip` is chaotically sensitive to tiny changes (
 
 Finding: resetting the evaluation zone on import counts the tip pool deposit and inflates the CoV from 37% to 101% for the same cartridge, so the zone matters as much as the geometry when comparing a measured part with a preset.
 
+## Done (v0.7.1) — results views polish (UI review)
+- [x] Surface map in "Coating state" mode now uses the same liquid / dry / cured colours as the 3D view (the legend claimed them, but the map drew dry thickness in a blue colour map, so a fully cured cartridge looked like liquid). Hover shows the state per cell: wet and projected dry thickness and solids for liquid, dry thickness and cure for set film, plug/bath, bare or bevel cut-away.
+- [x] Axial thickness chart no longer flattened by the tip deposit: the y-axis is scaled to the evaluation zone (1.3 × its 98th-percentile max) when an outlier is > 1.5× that, the off-scale peak is labelled ("↑ off scale: 111 µm at s = 35.6 mm"), and stations outside the evaluation zone are greyed. The circumference chart now averages over the evaluation zone only, so it matches the "uneven around the circumference" finding.
+- [x] `tools/ui-test.mjs` hovers the surface map and prints the tooltip, to catch state-text regressions
+
+Finding: with the SAICCS heated preset the readable axial profile shows the film rising from ~0.5 µm at the top of the wide chamber to ~2–2.5 µm through the taper (meniscus speed Q/A(s)), with a step at the nozzle/taper transition; previously the 111 µm tip deposit hid all of this behind a 0–100 µm axis.
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

@@ -15,8 +15,11 @@ export class Heatmap {
     new ResizeObserver(() => this.draw()).observe(this.el);
   }
 
-  set(geo, values, range, cmap, unit, overlays = []) {
-    Object.assign(this, { geo, values, range, cmap, unit, overlays });
+  // opts.rgb: per-cell colours (0–1, 3 per cell) used instead of the colour map;
+  // opts.describe(k): hover text for a cell (HTML) instead of the plain value.
+  set(geo, values, range, cmap, unit, overlays = [], opts = {}) {
+    Object.assign(this, { geo, values, range, cmap, unit, overlays, describe: opts.describe || null });
+    const rgb = opts.rgb || null;
     const { Ni, Nj } = geo;
     this.img.width = Ni; this.img.height = Nj;
     const g = this.img.getContext('2d');
@@ -25,7 +28,8 @@ export class Heatmap {
     for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) {
       const v = values[i * Nj + j];
       const cut = geo.voidMask && geo.voidMask[i * Nj + j];
-      const [r, gg, b] = cut ? [21, 24, 29] : colorAt(cmap, (v - lo) / (hi - lo));
+      const k = i * Nj + j;
+      const [r, gg, b] = cut ? [21, 24, 29] : rgb ? [255 * rgb[3 * k], 255 * rgb[3 * k + 1], 255 * rgb[3 * k + 2]] : colorAt(cmap, (v - lo) / (hi - lo));
       const p = 4 * ((Nj - 1 - j) * Ni + i);
       id.data[p] = r; id.data[p + 1] = gg; id.data[p + 2] = b; id.data[p + 3] = 255;
     }
@@ -82,7 +86,9 @@ export class Heatmap {
     const j = Math.min(this.geo.Nj - 1, Math.floor((1 - (y - T) / (H - T - B)) * this.geo.Nj));
     const v = this.values[i * this.geo.Nj + j];
     const ang = this.geo.flat ? '' : `, φ ${((this.geo.phi[j] * 180) / Math.PI).toFixed(0)}°`;
-    this.tip.innerHTML = `<div class="muted">s ${(this.geo.s[i] * 1e3).toFixed(2)} mm${ang}</div><div><b>${fmt(v)}</b> ${this.unit}</div>`;
+    const k = i * this.geo.Nj + j;
+    const body = this.geo.voidMask && this.geo.voidMask[k] ? 'Cut away (bevel)' : this.describe ? this.describe(k) : `<b>${fmt(v)}</b> ${this.unit}`;
+    this.tip.innerHTML = `<div class="muted">s ${(this.geo.s[i] * 1e3).toFixed(2)} mm${ang}</div><div>${body}</div>`;
     this.tip.style.display = 'block';
     this.tip.style.left = Math.min(W - this.tip.offsetWidth - 4, x + 12) + 'px';
     this.tip.style.top = Math.max(0, y - 40) + 'px';

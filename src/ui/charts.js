@@ -37,8 +37,10 @@ export class LineChart {
   }
 
   // series: [{name, x[], y[], color, band: {lo[], hi[]}, dash}]
+  // yMax: optional upper axis limit; data above it is clipped and the peak noted on the chart.
+  // shade: optional [{x0, x1, label}] x-ranges drawn greyed (e.g. outside the evaluation zone).
   set(data) {
-    Object.assign(this, { series: data.series || [], markers: data.markers || [] });
+    Object.assign(this, { series: data.series || [], markers: data.markers || [], yMax: data.yMax ?? null, shade: data.shade || [], xfmt: data.xfmt || fmt });
     this.title.textContent = data.title || '';
     this.xlabel = data.xlabel || ''; this.ylabel = data.ylabel || '';
     this.logY = !!data.logY;
@@ -75,6 +77,15 @@ export class LineChart {
     }
     if (!this.logY) y0 = Math.min(y0, 0);
     if (!(y1 > y0)) { y1 = y0 + 1; }
+    // optional clip of the y-range (outliers such as a tip deposit would otherwise flatten the profile)
+    let peak = null;
+    if (!this.logY && this.yMax !== null && isFinite(this.yMax) && this.yMax > y0 && this.yMax < y1) {
+      for (const s of ser) for (let i = 0; i < s.x.length; i++) {
+        const v = s.band ? Math.max(s.y[i], s.band.hi[i]) : s.y[i];
+        if (isFinite(v) && (!peak || v > peak.y)) peak = { x: s.x[i], y: v };
+      }
+      y1 = this.yMax;
+    }
     if (!this.logY) y1 += (y1 - y0) * 0.06;
     if (!(x1 > x0)) x1 = x0 + 1;
     const L = 52, R = 14, T = 8, B = this.xlabel ? 40 : 26;
@@ -95,6 +106,13 @@ export class LineChart {
     g.fillStyle = text2;
     if (this.xlabel) { g.textAlign = 'center'; g.fillText(this.xlabel, L + (W - L - R) / 2, H - 15); }
     if (this.ylabel) { g.save(); g.translate(11, T + (H - T - B) / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(this.ylabel, 0, 0); g.restore(); }
+    // greyed x-ranges
+    for (const sh of this.shade) {
+      const a = Math.max(L, px(Math.max(sh.x0, x0))), b = Math.min(W - R, px(Math.min(sh.x1, x1)));
+      if (!(b - a > 0.5)) continue;
+      g.fillStyle = muted; g.globalAlpha = 0.12; g.fillRect(a, T, b - a, H - T - B); g.globalAlpha = 1;
+      if (sh.label && b - a > g.measureText(sh.label).width + 6) { g.fillStyle = muted; g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillText(sh.label, (a + b) / 2, H - B - 3); }
+    }
     // stage markers
     g.save();
     let lastLabelEnd = -Infinity;
@@ -107,7 +125,8 @@ export class LineChart {
       if (xx + 3 > lastLabelEnd + 6 && xx + 3 + w < W - R) { g.fillStyle = muted; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(m.label, xx + 3, T + 1); lastLabelEnd = xx + 3 + w; }
     }
     g.restore();
-    // bands then lines
+    // bands then lines (clipped to the plot area)
+    g.save(); g.beginPath(); g.rect(L, T - 1, W - L - R, H - T - B + 2); g.clip();
     for (const s of ser) {
       if (!s.band) continue;
       g.beginPath();
@@ -126,6 +145,13 @@ export class LineChart {
       }
       g.stroke(); g.setLineDash([]);
       if (s.points) for (let i = 0; i < s.x.length; i++) { g.beginPath(); g.arc(px(s.x[i]), py(s.y[i]), 4, 0, 7); g.fillStyle = s.color; g.fill(); g.lineWidth = 2; g.strokeStyle = css('--surface-1'); g.stroke(); }
+    }
+    g.restore();
+    if (peak && peak.y > this.yMax) {
+      const xx = px(peak.x), txt = `\u2191 off scale: ${fmt(peak.y)}${this.ylabel ? ' ' + this.ylabel : ''} at ${this.xfmt(peak.x)}`;
+      g.font = '11px system-ui'; g.fillStyle = text2; g.textBaseline = 'top';
+      const w = g.measureText(txt).width;
+      g.textAlign = 'left'; g.fillText(txt, Math.max(L + 4, Math.min(xx - w - 6, W - R - w - 4)), T + 14);
     }
     if (this.cursorX !== null && this.cursorX >= x0 && this.cursorX <= x1) {
       g.strokeStyle = text2; g.lineWidth = 1; g.beginPath(); g.moveTo(px(this.cursorX) + 0.5, T); g.lineTo(px(this.cursorX) + 0.5, H - B); g.stroke();

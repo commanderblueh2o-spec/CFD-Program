@@ -493,6 +493,17 @@ function stateColors(fr) {
   return { rgb, gloss };
 }
 
+// Hover text for one cell of the coating-state map
+function stateText(fr, k, bare) {
+  const res = state.result, c = res._coat, hp = res._hp;
+  if (fr.mask && fr.mask[k] === 1) return 'Liquid-filled (bath, plug or full bore)';
+  if (bare && bare[k]) return 'Bare';
+  const wet = Math.max(0, fr.h[k] - hp) * 1e6, dry = fr.m[k] * (1 - (c.shrink || 0) * fr.alpha[k]) * 1e6;
+  const phi = fr.m[k] / fr.h[k], dried = c.solids >= c.phiMax || phi >= c.phiMax - 0.02;
+  const cure = c.cure.model !== 'none' ? ` · cure ${(fr.alpha[k] * 100).toFixed(0)}%` : '';
+  return dried ? `Dry film <b>${fmt(dry)}</b> µm${cure}` : `Liquid <b>${fmt(wet)}</b> µm wet (→ ${fmt(dry)} µm dry, ${(phi * 100).toFixed(0)}% solids)${cure}`;
+}
+
 function rangeOf(vals, key) {
   if (key === 'phi' || key === 'alpha') return [0, 1];
   let lo = Infinity, hi = -Infinity;
@@ -589,7 +600,12 @@ function updateViews() {
   $('#ovl3d').innerHTML = `<div class="ov-stage" style="border-color:${st ? res._stageColor(fr.stage) : '#888'}">${esc(fr.label.replace(/ \(end\)$/, ''))}</div>`
     + `<div>${esc(act.text)}</div>${fr.aux?.pool && fr.aux.pool[1] > 1e-11 ? `<div>Pool held at the tip: ${(fr.aux.pool[1] * 1e9).toFixed(1)} µL</div>` : ''}<div class="muted">t = ${fmtTime(fr.t)} · part ${Tm.toFixed(0)} °C</div>`
     + (view3d.radial > 1.01 ? `<div class="muted">Radius drawn ×${fmt(view3d.radial)} for visibility</div>` : '');
-  heatmap.set(res.geometry, vals, range, state.cmap, state.field === 'state' ? 'µm dry' : fieldDef.unit, marks);
+  if (state.field === 'state') {
+    // same liquid / dry / cured colours as the 3D view, so the legend holds for both
+    const sc = stateColors(fr), rgb = sc.rgb;
+    for (let k = 0; k < bare.length; k++) if (bare[k]) { rgb[3 * k] = 0.50; rgb[3 * k + 1] = 0.52; rgb[3 * k + 2] = 0.56; }
+    heatmap.set(res.geometry, vals, range, state.cmap, 'µm dry', marks, { rgb, describe: (k) => stateText(fr, k, bare) });
+  } else heatmap.set(res.geometry, vals, range, state.cmap, fieldDef.unit, marks);
   $('#tlInfo').textContent = `${fmtTime(fr.t)} / ${fmtTime(res.frames[res.frames.length - 1].t)}`;
   $('#frame').value = Math.round(state.p * 100);
   if (state.tab === 'charts') updateProfiles(vals, fieldDef, marks);
@@ -607,10 +623,27 @@ function updateProfiles(vals, fieldDef, marks) {
     for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; a += vals[k] * ar; w += ar; mn = Math.min(mn, vals[k]); mx = Math.max(mx, vals[k]); }
     mean.push(a / w); lo.push(mn); hi.push(mx);
   }
-  chAxial.set({ title: `${label} along the part (band = min–max around)`, xlabel: 's (mm)', ylabel: unit, series: [{ name: 'Mean around the part', x: sx, y: mean, color: SERIES[0], band: { lo, hi } }], markers: marks.map((m) => ({ x: m.s * 1e3, label: m.label })) });
+  // Thickness profiles: keep the evaluation zone readable when a tip deposit or edge bead is far
+  // thicker than the rest (it is clipped and its peak value noted), and grey out what lies outside the zone.
+  const Lmm = res.geometry.L * 1e3, zone = res.metrics?.zoneMm || [0, Lmm];
+  const shade = [];
+  if (zone[0] > 1e-6) shade.push({ x0: 0, x1: zone[0], label: 'outside zone' });
+  if (zone[1] < Lmm - 1e-6) shade.push({ x0: zone[1], x1: Lmm, label: 'outside zone' });
+  let yMax = null;
+  if (['state', 'dry', 'wet'].includes(state.field)) {
+    const inZ = []; let all = 0;
+    for (let i = 0; i < Ni; i++) { if (isFinite(hi[i])) all = Math.max(all, hi[i]); if (sx[i] >= zone[0] && sx[i] <= zone[1] && isFinite(hi[i])) inZ.push(hi[i]); }
+    inZ.sort((p, q) => p - q);
+    if (inZ.length > 3) {
+      const cap = 1.3 * inZ[Math.min(inZ.length - 1, Math.floor(0.98 * inZ.length))];
+      if (cap > 0 && all > 1.5 * cap) yMax = cap;
+    }
+  }
+  chAxial.set({ title: `${label} along the part (band = min–max around)`, xlabel: 's (mm)', ylabel: unit, yMax, shade, xfmt: (v) => `s = ${fmt(v)} mm`, series: [{ name: 'Mean around the part', x: sx, y: mean, color: SERIES[0], band: { lo, hi } }], markers: marks.map((m) => ({ x: m.s * 1e3, label: m.label })) });
   const cm = new Array(Nj).fill(0), cw = new Array(Nj).fill(0);
-  for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; cm[j] += vals[k] * ar; cw[j] += ar; }
-  if (!res.geometry.flat) chCirc.set({ title: `${label} around the circumference`, xlabel: 'angle φ (°)', ylabel: unit, series: [{ name: 'Mean along the part', x: res.geometry.phi.map((p) => (p * 180) / Math.PI), y: cm.map((c, j) => c / cw[j]), color: SERIES[1] }] });
+  for (let i = 0; i < Ni; i++) { if (sx[i] < zone[0] || sx[i] > zone[1]) continue; for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; cm[j] += vals[k] * ar; cw[j] += ar; } }
+  if (cw.some((w) => !(w > 0))) { cm.fill(0); cw.fill(0); for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; cm[j] += vals[k] * ar; cw[j] += ar; } }
+  if (!res.geometry.flat) chCirc.set({ title: `${label} around the circumference${shade.length ? ' (evaluation zone)' : ''}`, xlabel: 'angle φ (°)', ylabel: unit, series: [{ name: 'Mean along the part', x: res.geometry.phi.map((p) => (p * 180) / Math.PI), y: cm.map((c, j) => c / cw[j]), color: SERIES[1] }] });
   else { const W = res.spec.geometry.width; chCirc.set({ title: `${label} across the width`, xlabel: 'x (mm)', ylabel: unit, series: [{ name: 'Mean', x: cm.map((_, j) => -W / 2 + ((j + 0.5) * W) / Nj), y: cm.map((c, j) => c / cw[j]), color: SERIES[1] }] }); }
 }
 
