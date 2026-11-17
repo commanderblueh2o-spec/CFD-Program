@@ -2,6 +2,7 @@ import { test, assert, near, run } from './harness.mjs';
 import { PentaSolver, solveDense } from '../src/core/linalg.js';
 import { buildGeometry, parseProfileCSV, profileToCSV } from '../src/core/geometry.js';
 import { FilmSolver } from '../src/core/film.js';
+import { diffSpecs, resampleField, diffStats } from '../src/core/compare.js';
 import { COATINGS, SUBSTRATES, contactAngleOWRK } from '../src/core/materials.js';
 import { levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength, dipSpeedAt, dipWithdrawTable, dipPositionAt } from '../src/core/physics.js';
 
@@ -185,6 +186,48 @@ test('CSV profile import: headers, units, delimiters and a frustum bore volume',
   let V2 = 0; for (let i = 0; i < g2.Ni; i++) V2 += g2.crossArea[i] * g2.ds;
   near(V2, Vref, 2e-3, 'noisy frustum volume');
   return `frustum ${(V * 1e9).toFixed(3)} µL vs ${(Vref * 1e9).toFixed(3)}; 4001 noisy points → ${dn.points.length}`;
+});
+
+test('A/B comparison: resampling between grids, difference statistics and setting diffs', () => {
+  // Smooth analytic field on a tube; resample from a coarse grid to a fine one and back.
+  const field = (geo) => { const f = new Float32Array(geo.Ni * geo.Nj); for (let i = 0; i < geo.Ni; i++) for (let j = 0; j < geo.Nj; j++) f[i * geo.Nj + j] = 2 + Math.sin(geo.s[i] / geo.L * Math.PI) + 0.3 * Math.cos(2 * Math.PI * (j + 0.5) / geo.Nj); return f; };
+  const tube = { type: 'catheter', length: 40, od: 3 };
+  const A = buildGeometry({ geometry: tube, surface: 'outer', grid: { ns: 60, nphi: 16 } });
+  const B = buildGeometry({ geometry: tube, surface: 'outer', grid: { ns: 150, nphi: 24 } });
+  const fa = field(A), fb = field(B), r = resampleField(A, fa, B);
+  let err = 0, errEnd = 0;
+  for (let i = 0; i < B.Ni; i++) for (let j = 0; j < B.Nj; j++) { const k = i * B.Nj + j, e = Math.abs(r[k] - fb[k]); if (B.s[i] >= A.s[0] && B.s[i] <= A.s[A.Ni - 1]) err = Math.max(err, e); else errEnd = Math.max(errEnd, e); }
+  // interior: linear-interpolation error ≈ 0.3·Δφ²/8 ≈ 6e-3; end half-cells are held constant (≤ slope × half cell ≈ 0.026)
+  assert(err < 0.008, 'coarse → fine interpolation error ' + err);
+  assert(errEnd < 0.03, 'end half-cell error ' + errEnd);
+  // identical grids: exact copy, zero difference
+  const same = resampleField(B, fb, B); const d0 = fb.map((v, k) => v - same[k]);
+  const s0 = diffStats(d0, B.area);
+  assert(s0.rms === 0 && s0.thicker === 0, 'same grid gives zero difference');
+  // uniform +0.5 µm offset: mean = RMS = max = offset, all thicker
+  const d1 = fb.map((v, k) => v + 0.5 - same[k]), s1 = diffStats(d1, B.area, () => true, 0.01);
+  near(s1.mean, 0.5, 1e-6, 'mean offset'); near(s1.rms, 0.5, 1e-6, 'rms offset'); near(s1.thicker, 1, 1e-9, 'all thicker');
+  // a shorter part: stations beyond its end have no data (NaN) and are skipped by the stats
+  const C = buildGeometry({ geometry: { ...tube, length: 20 }, surface: 'outer', grid: { ns: 30, nphi: 16 } });
+  const rc = resampleField(C, field(C), B);
+  const nanRows = B.s.filter((s, i) => !isFinite(rc[i * B.Nj])).length, expect = B.s.filter((s) => s > 0.02 + 1e-9).length;
+  assert(Math.abs(nanRows - expect) <= 1 && nanRows > 0, `rows beyond the shorter part: ${nanRows} vs ~${expect}`);
+  assert(isFinite(diffStats(rc.map((v, k) => v - fb[k]), B.area).mean), 'stats skip missing cells');
+  // bevelled cartridge: cut-away cells of the source never leak into the result
+  const cart = { type: 'iol_cartridge', chamberLength: 12, chamberWidth: 5.6, chamberHeight: 4.0, taperLength: 14, nozzleWidth: 2.1, nozzleHeight: 1.7, nozzleLength: 10, tipWidth: 1.7, tipHeight: 1.35, wall: 0.6, tipBevelDeg: 45, bevelClockDeg: 270 };
+  const P = buildGeometry({ geometry: cart, surface: 'inner', grid: { ns: 80, nphi: 16 } }), Q = buildGeometry({ geometry: cart, surface: 'inner', grid: { ns: 120, nphi: 24 } });
+  const fp = new Float32Array(P.Ni * P.Nj).fill(1); for (let k = 0; k < fp.length; k++) if (P.voidMask[k]) fp[k] = 1e6;
+  const rq = resampleField(P, fp, Q);
+  assert(P.hasVoid && rq.every((v) => !isFinite(v) || Math.abs(v - 1) < 1e-6), 'void cells carry no weight');
+  // setting diffs
+  const sa = { presetId: 'x', geometry: { type: 'catheter', length: 40 }, stages: [{ type: 'dip', speed: 2 }, { type: 'cure', T: 80 }], metrics: { zone: [0, 10] } };
+  const sb = { presetId: 'y', geometry: { type: 'catheter', length: 40 }, stages: [{ type: 'dip', speed: 2.5 }, { type: 'cure', T: 80, time: 60 }], metrics: { zone: [0, 12] } };
+  const ds = diffSpecs(sa, sb);
+  assert(ds.length === 3 && ds[0].path === 'stages[0].speed' && ds[0].a === 2 && ds[0].b === 2.5, JSON.stringify(ds));
+  assert(ds.some((d) => d.path === 'stages[1].time' && d.a === undefined && d.b === 60), 'added field');
+  assert(ds.some((d) => d.path === 'metrics.zone' && d.a === '[0,10]'), 'array leaf compared whole');
+  assert(diffSpecs(sa, JSON.parse(JSON.stringify(sa))).length === 0, 'identical setups');
+  return `interp err ${err.toExponential(1)}; ${nanRows} stations beyond a 20 mm part; ${ds.length} setting diffs`;
 });
 
 run();

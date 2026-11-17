@@ -6,6 +6,8 @@ export const SERIES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#
 const RAMPS = {
   blue: ['#1d2a40', '#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7', '#6da7ec', '#86b6ef', '#9ec5f4', '#b7d3f6', '#cde2fb', '#eef5fe'],
   viridis: ['#440154', '#482878', '#3e4989', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'],
+  // diverging, for differences (B − A): blue = thinner, dark neutral = no change, orange = thicker
+  diverge: ['#cde2fb', '#86b6ef', '#3987e5', '#1c5cab', '#1f3350', '#2c2f36', '#4f3218', '#9a4f13', '#d95926', '#eba963', '#faead3'],
   cure: ['#1a2333', '#3b2a1a', '#6b3b12', '#9a4f13', '#c66a1c', '#e08a35', '#eba963', '#f3cb98', '#faead3'],
 };
 
@@ -21,7 +23,7 @@ for (const [name, stops] of Object.entries(RAMPS)) {
   }
   LUT[name] = lut;
 }
-export const COLORMAPS = Object.keys(RAMPS);
+export const COLORMAPS = Object.keys(RAMPS).filter((k) => k !== 'diverge');
 
 export function colorAt(name, t) {
   const lut = LUT[name] || LUT.blue;

@@ -5,10 +5,11 @@ import { buildGeometry, parseProfileCSV, profileToCSV } from '../core/geometry.j
 import { capillaryLength } from '../core/physics.js';
 import { GEOMETRY_SCHEMAS, STAGE_SCHEMAS, SUBSTRATE_OVERRIDES, FIELDS } from './schema.js';
 import { STAGE_DEFAULTS } from '../core/processes.js';
-import { SERIES, COLORMAPS, gradientCSS, fmt, niceRange } from './colormap.js';
+import { SERIES, COLORMAPS, gradientCSS, fmt, niceRange, colorAt } from './colormap.js';
 import { LineChart } from './charts.js';
 import { Heatmap } from './heatmap.js';
 import { View3D } from './view3d.js';
+import { diffSpecs, resampleField, diffStats } from '../core/compare.js';
 
 const VERSION = '1.0.0';
 const $ = (s) => document.querySelector(s);
@@ -19,7 +20,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 const state = {
   spec: null, result: null, p: 0, playing: false, speed: 1, field: 'state', cmap: 'blue', tab: 'v3d',
-  openStage: -1, running: false, sweep: null, live: false,
+  openStage: -1, running: false, sweep: null, live: false, ref: null,
 };
 
 // ---------------------------------------------------------------- persistence & helpers
@@ -411,6 +412,7 @@ function run(opts = {}) {
 
 function onResult(res, spec, opts) {
   state.result = res;
+  res._id = `${Date.now().toString(36)}-${jobId}`;
   state.resultSpecKey = specKey(spec);
   prepareResult(res);
   view3d.setGeometry(res.geometry);
@@ -447,6 +449,12 @@ function frameAt(p) {
 
 function fieldValues(fr, key) {
   const res = state.result, n = fr.h.length, out = new Float32Array(n);
+  if (key === 'diff') {
+    // final film of this run vs the final film of A (A keeps no frames), whatever frame is shown
+    const d = finalDry(res), r = refDry(res), vm = res.geometry.voidMask;
+    for (let k = 0; k < n; k++) out[k] = !r || (vm && vm[k]) ? NaN : d[k] - r[k];
+    return out;
+  }
   const hp = res._hp, sh = res._coat.shrink || 0;
   for (let k = 0; k < n; k++) {
     const film = fr.h[k] > 4 * hp;
@@ -506,6 +514,11 @@ function stateText(fr, k, bare) {
 
 function rangeOf(vals, key) {
   if (key === 'phi' || key === 'alpha') return [0, 1];
+  if (key === 'diff') {
+    const a = Array.from(vals, Math.abs).filter(isFinite).sort((p, q) => p - q);
+    const M = niceRange(0, Math.max(1e-3, a.length ? a[Math.min(a.length - 1, Math.floor(0.98 * a.length))] : 0))[1];
+    return [-M, M];
+  }
   let lo = Infinity, hi = -Infinity;
   for (const v of vals) { if (v < lo) lo = v; if (v > hi) hi = v; }
   if (key === 'dry' || key === 'wet') {
@@ -577,7 +590,9 @@ function updateViews() {
   const range = rangeOf(vals, state.field === 'state' ? 'dry' : state.field);
   const marks = markersOf(fr);
   const hp = res._hp;
-  if (state.field === 'state') {
+  if (state.field === 'diff') {
+    $('#legend').innerHTML = `<span class="lg-num" title="Final dry film of this run minus that of reference A: blue = thinner, orange = thicker">vs A ${fmt(range[0])}</span><i class="lg-grad" style="background:${gradientCSS('diverge')}"></i><span class="lg-num">+${fmt(range[1])} µm</span>`;
+  } else if (state.field === 'state') {
     $('#legend').innerHTML = `<span class="lg"><i style="background:linear-gradient(90deg,rgb(158,219,255),rgb(26,92,219))"></i>liquid (thin → thick)</span><span class="lg"><i style="background:rgb(230,204,148)"></i>dry</span>${res._coat.cure.model !== 'none' ? '<span class="lg"><i style="background:rgb(209,128,51)"></i>cured</span>' : ''}<span class="lg"><i style="background:#80858f"></i>bare</span>`;
   } else {
     $('#legend').innerHTML = `<span class="lg-num">${state.field !== 'temp' && state.field !== 'theta' ? 'bare · ' : ''}${fmt(range[0])}</span><i class="lg-grad" style="background:${gradientCSS(state.cmap)}"></i><span class="lg-num">${fmt(range[1])} ${fieldDef.unit}</span>`;
@@ -590,9 +605,10 @@ function updateViews() {
   view3d.cutaway = $('#cutaway').checked;
   view3d.tilt = st ? st.tilt ?? 90 : (res.spec.stages[0]?.tilt ?? STAGE_DEFAULTS[res.spec.stages[0]?.type]?.tilt ?? 90);
   let bare = null;
-  if (state.field !== 'theta' && state.field !== 'temp') { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) && !(fr.aux?.pool && fr.aux.pool[1] > 1e-12 && res.geometry.edgeEnd && res.geometry.edgeEnd[k] >= 0 && res.geometry.edgeEnd[k] <= res.geometry.poolReach[1]) ? 1 : 0; }
+  if (!['theta', 'temp', 'diff'].includes(state.field)) { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) && !(fr.aux?.pool && fr.aux.pool[1] > 1e-12 && res.geometry.edgeEnd && res.geometry.edgeEnd[k] >= 0 && res.geometry.edgeEnd[k] <= res.geometry.poolReach[1]) ? 1 : 0; }
   const act = activityOf(fr, st);
   if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, film, marks, bare, sc.rgb, sc.gloss); }
+  else if (state.field === 'diff') view3d.setField(vals, range, 'diverge', film, marks, null, diffColors(vals, range[1]));
   else view3d.setField(vals, range, state.cmap, film, marks, bare);
   view3d.setEffects(state.tab === 'v3d' ? act.fx : []);
   $('#v3d').className = 'view' + (state.tab === 'v3d' ? ' active' : '') + (act.bg ? ' ' + act.bg : '');
@@ -605,14 +621,17 @@ function updateViews() {
     const sc = stateColors(fr), rgb = sc.rgb;
     for (let k = 0; k < bare.length; k++) if (bare[k]) { rgb[3 * k] = 0.50; rgb[3 * k + 1] = 0.52; rgb[3 * k + 2] = 0.56; }
     heatmap.set(res.geometry, vals, range, state.cmap, 'µm dry', marks, { rgb, describe: (k) => stateText(fr, k, bare) });
+  } else if (state.field === 'diff') {
+    const d = finalDry(res), r = refDry(res);
+    heatmap.set(res.geometry, vals, range, 'diverge', 'µm', marks, { rgb: diffColors(vals, range[1]), describe: (k) => (isFinite(vals[k]) ? `<b>${vals[k] >= 0 ? '+' : ''}${fmt(vals[k])}</b> µm vs A<div class="muted">final dry film: this run ${fmt(d[k])} µm · A ${fmt(r[k])} µm</div>` : 'No reference data here (outside part A)') });
   } else heatmap.set(res.geometry, vals, range, state.cmap, fieldDef.unit, marks);
   $('#tlInfo').textContent = `${fmtTime(fr.t)} / ${fmtTime(res.frames[res.frames.length - 1].t)}`;
   $('#frame').value = Math.round(state.p * 100);
-  if (state.tab === 'charts') updateProfiles(vals, fieldDef, marks);
+  if (state.tab === 'charts') updateProfiles(vals, fieldDef, marks, fr.t);
   for (const c of [chThick, chCure, chTemp, chVisc]) { c.cursorX = fr.t; if (state.tab === 'charts') c.draw(); }
 }
 
-function updateProfiles(vals, fieldDef, marks) {
+function updateProfiles(vals, fieldDef, marks, t) {
   const res = state.result;
   const { Ni, Nj } = res.geometry;
   const label = state.field === 'state' ? 'Dry film thickness' : fieldDef.label, unit = state.field === 'state' ? 'µm' : fieldDef.unit;
@@ -620,8 +639,8 @@ function updateProfiles(vals, fieldDef, marks) {
   const mean = [], lo = [], hi = [];
   for (let i = 0; i < Ni; i++) {
     let a = 0, w = 0, mn = Infinity, mx = -Infinity;
-    for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; a += vals[k] * ar; w += ar; mn = Math.min(mn, vals[k]); mx = Math.max(mx, vals[k]); }
-    mean.push(a / w); lo.push(mn); hi.push(mx);
+    for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k], v = vals[k]; if (!isFinite(v)) continue; a += v * ar; w += ar; mn = Math.min(mn, v); mx = Math.max(mx, v); }
+    mean.push(w > 0 ? a / w : NaN); lo.push(w > 0 ? mn : NaN); hi.push(w > 0 ? mx : NaN);
   }
   // Thickness profiles: keep the evaluation zone readable when a tip deposit or edge bead is far
   // thicker than the rest (it is clipped and its peak value noted), and grey out what lies outside the zone.
@@ -632,17 +651,21 @@ function updateProfiles(vals, fieldDef, marks) {
   let yMax = null;
   if (['state', 'dry', 'wet'].includes(state.field)) {
     const inZ = []; let all = 0;
+    if (state.ref && state.field !== 'wet') for (const v of state.ref.axial.mean) if (isFinite(v)) all = Math.max(all, v);
     for (let i = 0; i < Ni; i++) { if (isFinite(hi[i])) all = Math.max(all, hi[i]); if (sx[i] >= zone[0] && sx[i] <= zone[1] && isFinite(hi[i])) inZ.push(hi[i]); }
+    if (state.ref && state.field !== 'wet') state.ref.axial.s.forEach((x, i) => { const v = state.ref.axial.mean[i]; if (x >= zone[0] && x <= zone[1] && isFinite(v) && v !== null) inZ.push(v); });
     inZ.sort((p, q) => p - q);
     if (inZ.length > 3) {
       const cap = 1.3 * inZ[Math.min(inZ.length - 1, Math.floor(0.98 * inZ.length))];
       if (cap > 0 && all > 1.5 * cap) yMax = cap;
     }
   }
-  chAxial.set({ title: `${label} along the part (band = min–max around)`, xlabel: 's (mm)', ylabel: unit, yMax, shade, xfmt: (v) => `s = ${fmt(v)} mm`, series: [{ name: 'Mean around the part', x: sx, y: mean, color: SERIES[0], band: { lo, hi } }], markers: marks.map((m) => ({ x: m.s * 1e3, label: m.label })) });
+  const series = [{ name: state.ref && ['state', 'dry'].includes(state.field) ? (state.p >= res.frames.length - 1.001 ? 'This run (final)' : `This run at ${fmtTime(t ?? 0)}`) : 'Mean around the part', x: sx, y: mean, color: SERIES[0], band: { lo, hi } }];
+  if (state.ref && ['state', 'dry'].includes(state.field)) series.push({ name: 'Reference A (final)', x: state.ref.axial.s, y: state.ref.axial.mean, color: SERIES[3], dash: true });
+  chAxial.set({ title: `${label} along the part (band = min–max around)`, xlabel: 's (mm)', ylabel: unit, yMax, shade, xfmt: (v) => `s = ${fmt(v)} mm`, series, markers: marks.map((m) => ({ x: m.s * 1e3, label: m.label })) });
   const cm = new Array(Nj).fill(0), cw = new Array(Nj).fill(0);
-  for (let i = 0; i < Ni; i++) { if (sx[i] < zone[0] || sx[i] > zone[1]) continue; for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; cm[j] += vals[k] * ar; cw[j] += ar; } }
-  if (cw.some((w) => !(w > 0))) { cm.fill(0); cw.fill(0); for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; cm[j] += vals[k] * ar; cw[j] += ar; } }
+  for (let i = 0; i < Ni; i++) { if (sx[i] < zone[0] || sx[i] > zone[1]) continue; for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; if (isFinite(vals[k])) { cm[j] += vals[k] * ar; cw[j] += ar; } } }
+  if (cw.some((w) => !(w > 0))) { cm.fill(0); cw.fill(0); for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) { const k = i * Nj + j, ar = res.geometry.area[k]; if (isFinite(vals[k])) { cm[j] += vals[k] * ar; cw[j] += ar; } } }
   if (!res.geometry.flat) chCirc.set({ title: `${label} around the circumference${shade.length ? ' (evaluation zone)' : ''}`, xlabel: 'angle φ (°)', ylabel: unit, series: [{ name: 'Mean along the part', x: res.geometry.phi.map((p) => (p * 180) / Math.PI), y: cm.map((c, j) => c / cw[j]), color: SERIES[1] }] });
   else { const W = res.spec.geometry.width; chCirc.set({ title: `${label} across the width`, xlabel: 'x (mm)', ylabel: unit, series: [{ name: 'Mean', x: cm.map((_, j) => -W / 2 + ((j + 0.5) * W) / Nj), y: cm.map((c, j) => c / cw[j]), color: SERIES[1] }] }); }
 }
@@ -653,7 +676,8 @@ function updateHistory() {
   const markers = res.stageInfo.map((s) => ({ x: s.tStart, label: s.label }));
   chThick.set({ title: 'Average film thickness', xlabel: 't (s)', ylabel: 'µm', markers, series: [
     { name: 'Wet', x: t, y: H.map((h) => h.wet * 1e6), color: SERIES[0] },
-    { name: 'Dry', x: t, y: H.map((h) => h.dry * 1e6), color: SERIES[1] }] });
+    { name: 'Dry', x: t, y: H.map((h) => h.dry * 1e6), color: SERIES[1] },
+    ...(state.ref && state.ref.id !== res._id ? [{ name: 'Dry (A)', x: state.ref.history.t, y: state.ref.history.dry, color: SERIES[3], dash: true }] : [])] });
   chCure.set({ title: 'Degree of cure', xlabel: 't (s)', ylabel: 'α', markers, series: [{ name: 'Cure', x: t, y: H.map((h) => h.alpha), color: SERIES[2] }] });
   chTemp.set({ title: 'Part temperature (average)', xlabel: 't (s)', ylabel: '°C', markers, series: [{ name: 'Part', x: t, y: H.map((h) => h.Tpart ?? h.T), color: SERIES[3] }] });
   chVisc.set({ title: 'Peak viscosity — film setting (log)', xlabel: 't (s)', ylabel: 'Pa·s', logY: true, markers, series: [{ name: 'Viscosity', x: t, y: H.map((h) => h.muMax), color: SERIES[6] }] });
@@ -719,6 +743,146 @@ function startRecording() {
 }
 function stopRecording() { if (recorder && recorder.state !== 'inactive') recorder.stop(); }
 
+// ---------------------------------------------------------------- A/B comparison
+// A reference run ("A") is pinned as a compact snapshot (final dry film, axial profile, history and
+// metrics) so it survives changing presets, re-running and reloading the page.
+const REF_KEY = 'coatsim.ref';
+const r4 = (v) => (isFinite(v) ? +v.toPrecision(4) : null);
+function runName(spec) { const p = PRESETS.find((x) => x.id === spec.presetId); return p ? p.name : 'Custom setup'; }
+function snapshotOf(res) {
+  const geo = res.geometry, fr = res.frames[res.frames.length - 1], dry = fieldValues(fr, 'dry'), { Ni, Nj } = geo;
+  const s = [], mean = [];
+  for (let i = 0; i < Ni; i++) {
+    let a = 0, w = 0;
+    for (let j = 0; j < Nj; j++) { const k = i * Nj + j; if (geo.voidMask && geo.voidMask[k]) continue; a += dry[k] * geo.area[k]; w += geo.area[k]; }
+    s.push(r4(geo.s[i] * 1e3)); mean.push(w > 0 ? r4(a / w) : null);
+  }
+  const m = res.metrics, H = res.history;
+  return {
+    id: res._id, name: runName(res.spec), when: new Date().toISOString(), spec: res.spec,
+    geo: { Ni, Nj, L: geo.L, flat: !!geo.flat, s: Array.from(geo.s), voidMask: geo.voidMask ? Array.from(geo.voidMask) : null },
+    dry: Array.from(dry, r4), axial: { s, mean },
+    history: { t: H.map((h) => r4(h.t)), dry: H.map((h) => r4(h.dry * 1e6)) },
+    metrics: { dry: m.dry, coverage: m.coverage, cureMean: m.cureMean, cureOn: res._coat.cure.model !== 'none', zoneMm: m.zoneMm, defects: m.defects.map((d) => ({ severity: d.severity, title: d.title })) },
+  };
+}
+function saveRef() { try { if (state.ref) localStorage.setItem(REF_KEY, JSON.stringify(state.ref)); else localStorage.removeItem(REF_KEY); } catch { /* storage full or unavailable: the reference lasts for this session */ } }
+function loadRef() { try { const r = JSON.parse(localStorage.getItem(REF_KEY)); return r && r.geo && r.dry ? r : null; } catch { return null; } }
+function setRef(snap) {
+  state.ref = snap;
+  saveRef(); refreshFieldOptions();
+  if (!snap && state.field === 'diff') { state.field = 'dry'; $('#field').value = 'dry'; }
+  renderResultsPanel(); updateHistory(); updateViews();
+}
+function refDry(res) {
+  if (!state.ref || !res) return null;
+  if (res._refFor !== state.ref.id) { res._refDry = resampleField(state.ref.geo, state.ref.dry.map((v) => (v === null ? NaN : v)), res.geometry); res._refFor = state.ref.id; }
+  return res._refDry;
+}
+function finalDry(res) { if (!res._finalDry) res._finalDry = fieldValues(res.frames[res.frames.length - 1], 'dry'); return res._finalDry; }
+function refreshFieldOptions() {
+  const sel = $('#field'), keep = state.field;
+  sel.innerHTML = '';
+  for (const f of FIELDS) if (!f.needsRef || state.ref) sel.append(el('option', { value: f.key }, esc(f.label)));
+  sel.value = FIELDS.some((f) => f.key === keep && (!f.needsRef || state.ref)) ? keep : 'state';
+  state.field = sel.value;
+}
+function diffColors(vals, M) {
+  const rgb = new Float32Array(3 * vals.length);
+  for (let k = 0; k < vals.length; k++) {
+    const v = vals[k];
+    if (!isFinite(v)) { rgb[3 * k] = 0.30; rgb[3 * k + 1] = 0.31; rgb[3 * k + 2] = 0.34; continue; }
+    const c = colorAt('diverge', 0.5 + 0.5 * clamp(v / M, -1, 1));
+    rgb[3 * k] = c[0] / 255; rgb[3 * k + 1] = c[1] / 255; rgb[3 * k + 2] = c[2] / 255;
+  }
+  return rgb;
+}
+
+// Plain-language label and values for one setting difference (A → this run)
+const COAT_KEYS = { mu0: ['Viscosity', 'mPa·s', 1e3], solids: ['Solids content', '%', 100], phiMax: ['Max. solids (dry)', '%', 100], evap0: ['Drying rate', 'µm/s', 1], d: ['Surface tension (dispersive)', 'mN/m', 1], p: ['Surface tension (polar)', 'mN/m', 1] };
+function describeDiffs(a, b) {
+  const out = [], seen = new Set();
+  const na = a.stages?.length || 0, nb = b.stages?.length || 0;
+  if (na !== nb) out.push({ label: 'Process stages', a: `${na} stages`, b: `${nb} stages` });
+  const val = (v, scale = 1, unit = '') => (v === undefined ? 'default' : typeof v === 'number' ? `${fmt(v * scale)}${unit ? ' ' + unit : ''}` : String(v).replace(/_/g, ' '));
+  for (const d of diffSpecs(a, b)) {
+    let m;
+    if ((m = d.path.match(/^stages\[(\d+)\]\.(\w+)/))) {
+      const i = +m[1], key = m[2];
+      if (i >= Math.min(na, nb)) continue;
+      const sa = a.stages[i], sb = b.stages[i], name = sb.label || STAGE_SCHEMAS[sb.type]?.name || sb.type;
+      if (key === 'type' || sa.type !== sb.type) { if (!seen.has('t' + i)) out.push({ label: `Stage ${i + 1}`, a: sa.label || STAGE_SCHEMAS[sa.type]?.name, b: name }); seen.add('t' + i); continue; }
+      if (key === 'label') continue;
+      const f = STAGE_SCHEMAS[sb.type]?.fields.find((x) => x.key === key), def = STAGE_DEFAULTS[sb.type] || {};
+      const va = sa[key] ?? def[key], vb = sb[key] ?? def[key];
+      if (va === vb || seen.has(i + key)) continue; seen.add(i + key);
+      const opt = (v) => f?.options?.find((o) => o[0] === v)?.[1];
+      out.push({ label: `${name} — ${f ? f.label : key}`, a: opt(va) ?? val(va, 1, f?.unit), b: opt(vb) ?? val(vb, 1, f?.unit) });
+    } else if (d.path.startsWith('geometry.points')) {
+      if (!seen.has('pts')) out.push({ label: 'Part — measured profile', a: 'profile A', b: 'changed' }); seen.add('pts');
+    } else if ((m = d.path.match(/^geometry\.(\w+)/))) {
+      const f = GEOMETRY_SCHEMAS[b.geometry.type]?.fields.find((x) => x.key === m[1]) || GEOMETRY_SCHEMAS[a.geometry.type]?.fields.find((x) => x.key === m[1]);
+      out.push({ label: m[1] === 'type' ? 'Part type' : `Part — ${f ? f.label : m[1]}`, a: val(d.a, 1, f?.unit), b: val(d.b, 1, f?.unit) });
+    } else if ((m = d.path.match(/^coatingOverrides\.(\w+)/))) {
+      if (m[1] === 'cure') { if (!seen.has('cure')) out.push({ label: 'Coating — cure kinetics', a: 'A', b: 'changed' }); seen.add('cure'); continue; }
+      const [lab, unit, sc] = COAT_KEYS[m[1]] || [m[1], '', 1];
+      const res = (sp) => { try { return resolveCoating(sp)[m[1]]; } catch { return undefined; } };
+      out.push({ label: `Coating — ${lab}`, a: val(d.a ?? res(a), sc, unit), b: val(d.b ?? res(b), sc, unit) });
+    } else if (d.path === 'coating') out.push({ label: 'Coating', a: COATINGS[d.a]?.name || d.a, b: COATINGS[d.b]?.name || d.b });
+    else if (d.path === 'substrate') out.push({ label: 'Part material', a: SUBSTRATES[d.a]?.name || d.a, b: SUBSTRATES[d.b]?.name || d.b });
+    else if (d.path.startsWith('grid')) { if (!seen.has('grid')) out.push({ label: 'Resolution', a: `${a.grid?.ns}×${a.grid?.nphi}`, b: `${b.grid?.ns}×${b.grid?.nphi}` }); seen.add('grid'); }
+    else out.push({ label: d.path.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\./g, ' — '), a: val(d.a), b: val(d.b) });
+  }
+  return out;
+}
+
+function compareHTML(res) {
+  const A = state.ref, m = res.metrics, ma = A.metrics;
+  const cureOn = res._coat.cure.model !== 'none' || ma.cureOn;
+  const delta = (b, a, digits, unit, pct) => { if (!isFinite(a) || !isFinite(b)) return ''; const dv = b - a; const rel = pct && Math.abs(a) > 1e-12 ? `<br><small>${dv >= 0 ? '+' : '−'}${Math.abs((dv / a) * 100).toFixed(0)}%</small>` : ''; const cls = Math.abs(dv) < 1e-9 ? '' : dv > 0 ? 'up' : 'dn'; return `<span class="${cls}">${dv >= 0 ? '+' : '−'}${Math.abs(dv).toFixed(digits)}${unit}</span>${rel}`; };
+  const row = (k, a, b, d) => `<tr><td>${k}</td><td>${a}</td><td>${b}</td><td>${d}</td></tr>`;
+  const sev = (list, s) => list.filter((d) => d.severity === s).length;
+  const fd = (list) => `${sev(list, 'high')} / ${sev(list, 'medium')}`;
+  const p = (v) => (v * 100).toFixed(v > 0.995 && v < 1 ? 1 : 0);
+  // difference map over this run's evaluation zone
+  const fr = res.frames[res.frames.length - 1], d = fieldValues(fr, 'diff'), geo = res.geometry, z = m.zoneMm || [0, geo.L * 1e3];
+  const tol = Math.max(0.01, 0.05 * (ma.dry.mean || 0));
+  const st = diffStats(d, geo.area, (k) => { const s = geo.s[Math.floor(k / geo.Nj)] * 1e3; return s >= z[0] && s <= z[1]; }, tol);
+  const sameGrid = A.geo.Ni === geo.Ni && A.geo.Nj === geo.Nj && Math.abs(A.geo.L - geo.L) < 1e-9;
+  const diffs = describeDiffs(A.spec, res.spec);
+  const dl = (x) => `<tr><td>${esc(x.label)}</td><td>${esc(x.a ?? '')}</td><td>→ ${esc(x.b ?? '')}</td></tr>`;
+  const at = st.kmax >= 0 ? ` at s = ${fmt(geo.s[Math.floor(st.kmax / geo.Nj)] * 1e3)} mm` : '';
+  return `<div class="cmp">
+    <h4>Compared with reference A</h4>
+    <div class="hint cmp-name" title="${esc(A.name)}">A: ${esc(A.name)}</div><div class="hint">pinned ${new Date(A.when).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</div>
+    <table class="data cmp-t"><tr><th></th><th>A</th><th>This run</th><th>Δ</th></tr>
+      ${row('Dry film, µm', fmt(ma.dry.mean), fmt(m.dry.mean), delta(m.dry.mean, ma.dry.mean, Math.abs(m.dry.mean - ma.dry.mean) < 0.1 ? 3 : 2, '', true))}
+      ${row('P5–P95, µm', `${fmt(ma.dry.p5)}–${fmt(ma.dry.p95)}`, `${fmt(m.dry.p5)}–${fmt(m.dry.p95)}`, '')}
+      ${row('Uniformity (CoV)', (ma.dry.cov * 100).toFixed(0) + '%', (m.dry.cov * 100).toFixed(0) + '%', delta(m.dry.cov * 100, ma.dry.cov * 100, 0, ' pt'))}
+      ${row('Coverage', p(ma.coverage) + '%', p(m.coverage) + '%', delta(m.coverage * 100, ma.coverage * 100, 1, ' pt'))}
+      ${cureOn ? row('Cured', (ma.cureMean * 100).toFixed(0) + '%', (m.cureMean * 100).toFixed(0) + '%', delta(m.cureMean * 100, ma.cureMean * 100, 0, ' pt')) : ''}
+      ${row('Critical / warn', fd(ma.defects), fd(m.defects), '')}
+    </table>
+    ${isFinite(st.mean) ? `<div class="hint">Difference map (evaluation zone): on average ${st.mean >= 0 ? '+' : '−'}${fmt(Math.abs(st.mean))} µm, RMS ${fmt(st.rms)} µm; thicker on ${(st.thicker * 100).toFixed(0)}% and thinner on ${(st.thinner * 100).toFixed(0)}% of the area (by more than ${fmt(tol)} µm). Largest change ${st.maxAbs >= 0 ? '+' : '−'}${fmt(Math.abs(st.maxAbs))} µm${at}.${sameGrid ? '' : ' Grids differ: A is compared at the same distance s from the top of the part.'}</div>` : '<div class="hint">The parts do not overlap, so no difference map.</div>'}
+    <div class="cmp-btns"><button class="btn small" type="button" data-cmp="map">Show difference map</button><button class="btn small" type="button" data-cmp="pin">Make this run A</button><button class="linkbtn" type="button" data-cmp="clear">Clear A</button></div>
+    <h4>Settings changed (A → this run)</h4>
+    ${diffs.length ? `<table class="kv diff">${diffs.slice(0, 8).map(dl).join('')}</table>${diffs.length > 8 ? `<details class="adv"><summary>${diffs.length - 8} more</summary><table class="kv diff">${diffs.slice(8).map(dl).join('')}</table></details>` : ''}` : '<div class="hint">Same settings as A.</div>'}
+  </div>`;
+}
+
+function refBarHTML(res) {
+  if (!state.ref) return '<div class="refbar"><button class="btn small" type="button" data-cmp="pin" title="Keep this result as reference A, change settings and run again to compare">📌 Set as reference A</button><span class="hint">then change settings and run again to compare</span></div>';
+  if (state.ref.id === res._id) return '<div class="refbar"><span class="badge ok">A</span><span class="hint">This run is reference A. Change settings and run again to compare.</span><button class="linkbtn" type="button" data-cmp="clear">Clear</button></div>';
+  return compareHTML(res);
+}
+function onCompareClick(e) {
+  const b = e.target.closest('[data-cmp]'); if (!b || !state.result) return;
+  const act = b.dataset.cmp;
+  if (act === 'pin') { setRef(snapshotOf(state.result)); toast('Reference A set — change settings and run again to compare'); }
+  if (act === 'clear') { setRef(null); toast('Reference A cleared'); }
+  if (act === 'map') { state.field = 'diff'; $('#field').value = 'diff'; document.querySelector('#tabs button[data-tab=map]').click(); }
+}
+
 // ---------------------------------------------------------------- results panel
 function renderResultsPanel() {
   const box = $('#results');
@@ -739,6 +903,7 @@ function renderResultsPanel() {
       ${card('Uniformity', (m.dry.cov * 100).toFixed(0), '% CoV', m.dry.cov < 0.15 ? 'even' : m.dry.cov < 0.35 ? 'moderate' : 'uneven')}
       ${cureOn ? card('Cured', (m.cureMean * 100).toFixed(0), '%', m.cureMean > 0.9 ? 'fully cured' : 'under-cured') : card('Wet film (mean)', fmt(m.wet.mean), 'µm', 'non-curing coating')}
     </div>
+    ${refBarHTML(res)}
     <h4>Findings</h4>
     ${defects.length ? defects.slice(0, 4).map(def).join('') : '<div class="defect"><div class="t"><span class="badge ok">✓ OK</span>No problems found</div><div class="d">The film is continuous and reasonably even.</div></div>'}
     ${defects.length > 4 ? `<details class="adv"><summary>${defects.length - 4} more finding${defects.length > 5 ? 's' : ''}</summary>${defects.slice(4).map(def).join('')}</details>` : ''}
@@ -887,7 +1052,8 @@ function init() {
   ps.append(el('option', { value: '' }, '— custom setup —'));
   for (const p of PRESETS) ps.append(el('option', { value: p.id, title: p.description }, esc(p.name)));
   ps.addEventListener('change', () => { if (!ps.value) return; const s = getPreset(ps.value); s.presetId = ps.value; setSpec(s); toast(PRESETS.find((p) => p.id === ps.value).description); });
-  for (const f of FIELDS) $('#field').append(el('option', { value: f.key }, esc(f.label)));
+  state.ref = loadRef(); refreshFieldOptions();
+  $('#results').addEventListener('click', onCompareClick);
   for (const c of COLORMAPS) $('#cmap').append(el('option', { value: c }, { blue: 'Blue', viridis: 'Viridis', cure: 'Copper' }[c] || c));
   $('#field').addEventListener('change', (e) => { state.field = e.target.value; updateViews(); });
   $('#cmap').addEventListener('change', (e) => { state.cmap = e.target.value; updateViews(); });

@@ -55,6 +55,17 @@ Finding: resetting the evaluation zone on import counts the tip pool deposit and
 
 Finding: with the SAICCS heated preset the readable axial profile shows the film rising from ~0.5 µm at the top of the wide chamber to ~2–2.5 µm through the taper (meniscus speed Q/A(s)), with a step at the nozzle/taper transition; previously the 111 µm tip deposit hid all of this behind a 0–100 µm axis.
 
+## Done (v0.8) — A/B run comparison
+- [x] Pin any result as reference A ("📌 Set as reference A" in the results panel); it is kept as a compact snapshot (final dry film, axial profile, history, metrics, setup) that survives switching presets, re-running and reloading the page
+- [x] Every later run shows a comparison card: A vs this run for dry film, P5–P95, CoV, coverage, cure and findings, with Δ (and % for thickness); a plain-language list of the settings that changed (stage fields with their labels and defaults, coating values resolved from the library, part dimensions, measured profile, resolution)
+- [x] Difference map "Final dry film − reference A" on the surface map and the 3D part (diverging blue = thinner / orange = thicker, symmetric scale, hover shows both values); evaluation-zone statistics: mean and RMS change, area thicker/thinner, largest change and where
+- [x] Axial profile and thickness-history charts overlay A (dashed); the axial y-scale accounts for A so its tip deposit does not flatten the comparison
+- [x] Runs on different grids or part lengths are compared at the same distance s from the top (`resampleField` in `src/core/compare.js`: linear in s and around, periodic for tubes, bevel cut-away cells carry no weight, beyond the shorter part = no data). Tested against an analytic field: interior error 5.7e-3 vs the expected linear-interpolation error ≈ 6e-3
+- [x] Fixed: chart headers with a two-line title/legend overlapped the plot (fixed 22 px header height)
+- [x] `tools/ui-compare-test.mjs`: pin → change viscosity → re-run → table, settings diff, difference map hover, chart overlay, reload persistence, clear
+
+Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s thins the dry film by 38% (1.27 → 0.79 µm) and doubles the CoV (37% → 75%); the film is thinner on 90% of the evaluation zone, most of all in the nozzle (−1.5 µm at s ≈ 34 mm), while the corner stripes of the oval bore get slightly thicker. The cure rises 72% → 77% because the thinner film dries sooner.
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
@@ -71,7 +82,6 @@ Earlier finding (wall excess after draining, before evaporative cooling): the dr
 - [ ] Calibrate the HA preset against a measured SAICCS cartridge (coating volume, dry thickness, coverage, cure time)
 - [ ] Simultaneous inner + outer surface run (both walls of a tube in one simulation)
 - [ ] Marangoni stresses from solids-dependent surface tension (edge and picture-frame effects)
-- [ ] Side-by-side comparison of two runs (A/B) with difference maps
 - [ ] Multi-coat processes: base coat + top coat, each with its own coating properties
 - [ ] Calibration helper: fit viscosity or evaporation rate to a measured dry thickness
 - [ ] Moisture-cure kinetics (RTV silicones), oxygen inhibition for UV acrylates

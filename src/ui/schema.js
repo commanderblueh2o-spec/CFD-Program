@@ -209,4 +209,5 @@ export const FIELDS = [
   { key: 'temp', label: 'Part temperature', unit: '°C' },
   { key: 'phi', label: 'Solids fraction', unit: '' },
   { key: 'theta', label: 'Contact angle', unit: '°' },
+  { key: 'diff', label: 'Final dry film − reference A', unit: 'µm', needsRef: true },
 ];

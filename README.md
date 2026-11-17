@@ -27,6 +27,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 - **Automatic findings:** incomplete coverage, coating pooled at the tip, axial gradients and sag, circumferential sag, Rayleigh–Plateau beading, edge beads, under-cure, residual solvent and solvent entrapment, and trapped liquid in lumens. Each comes with a suggested remedy.
 - **Analytic cross-checks** (LLD and Bretherton predictions), dimensionless groups (Bond number, capillary length, capillary rise) and a mass balance.
 - **Parameter sweeps:** vary any stage, coating, geometry or substrate parameter and chart thickness, uniformity and coverage.
+- **A/B comparison:** pin a run as reference A, change settings and re-run to see the metric deltas, a plain-language list of changed settings, and a difference map of the final dry film (also for different grids or part lengths).
 - **Save and load** setups, shareable links, and CSV/JSON/PNG export.
 
 ## Geometries and materials

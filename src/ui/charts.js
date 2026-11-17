@@ -25,7 +25,7 @@ export class LineChart {
     this.legend = document.createElement('div'); this.legend.className = 'chart-legend';
     this.canvas = document.createElement('canvas');
     this.tip = document.createElement('div'); this.tip.className = 'chart-tip';
-    const head = document.createElement('div'); head.className = 'chart-head';
+    const head = this.head = document.createElement('div'); head.className = 'chart-head';
     head.append(this.title, this.legend);
     this.el.append(head, this.canvas, this.tip);
     this.series = []; this.markers = [];
@@ -58,7 +58,7 @@ export class LineChart {
 
   draw() {
     const cv = this.canvas, dpr = window.devicePixelRatio || 1;
-    const W = this.el.clientWidth, H = Math.max(80, this.el.clientHeight - 28);
+    const W = this.el.clientWidth, H = Math.max(80, this.el.clientHeight - Math.max(28, this.head.offsetHeight + 6));
     if (W < 10) return;
     cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
     const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);

@@ -139,7 +139,7 @@ details.adv > summary { cursor: pointer; color: var(--text-muted); font-size: 12
 
 .chart { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px 4px; min-height: 120px; overflow: hidden; }
 .chart canvas { display: block; }
-.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; height: 22px; }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-height: 22px; }
 .chart-title { font-weight: 600; font-size: 12px; color: var(--text-primary); }
 .chart-legend { display: flex; gap: 10px; font-size: 11px; color: var(--text-secondary); flex-wrap: wrap; }
 .legend-item i, .chart-tip i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
@@ -188,3 +188,20 @@ kbd { background: var(--card-2); border: 1px solid var(--line); border-radius: 3
   .layout { grid-template-columns: 1fr; height: auto; }
   .center { height: 80vh; }
 }
+
+/* A/B comparison */
+.refbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
+.refbar .hint { margin: 0; flex: 1; min-width: 120px; }
+.cmp { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); padding: 2px 10px 10px; margin-top: 10px; }
+.cmp h4:first-child { margin-top: 10px; }
+.cmp table.cmp-t { margin-top: 6px; }
+.cmp table.cmp-t th, .cmp table.cmp-t td { padding: 3px 4px; }
+.cmp table.cmp-t td:first-child { color: var(--text-secondary); }
+.cmp .up { color: #eba963; } .cmp .dn { color: #86b6ef; }
+.cmp td small { color: var(--text-muted); }
+.cmp-btns { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0 2px; }
+.cmp-btns .linkbtn { padding: 0 2px; }
+table.kv.diff td:nth-child(2) { text-align: right; color: var(--text-muted); white-space: nowrap; }
+table.kv.diff td:last-child { white-space: nowrap; }
+.cmp .cmp-name { margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp table.cmp-t td:not(:first-child) { white-space: nowrap; }

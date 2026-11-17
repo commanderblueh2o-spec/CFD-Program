@@ -8,7 +8,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const pkg = JSON.parse(read('package.json'));
 
-const CORE = ['materials', 'physics', 'geometry', 'linalg', 'metrics', 'film', 'processes', 'presets'].map((m) => `src/core/${m}.js`);
+const CORE = ['materials', 'physics', 'geometry', 'linalg', 'metrics', 'film', 'processes', 'presets', 'compare'].map((m) => `src/core/${m}.js`);
 const UI = ['colormap', 'schema', 'charts', 'heatmap', 'view3d', 'app'].map((m) => `src/ui/${m}.js`);
 
 function bundle(files, seen = new Set()) {
