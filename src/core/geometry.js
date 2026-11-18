@@ -324,3 +324,65 @@ export function parseProfileCSV(text, opts = {}) {
 export function profileToCSV(points) {
   return 's_mm,half_width_mm,half_height_mm\n' + points.map((p) => p.join(',')).join('\n') + '\n';
 }
+
+// Shape of the liquid pool held at the bevelled (or square) tip of a vertical, tip-down bore.
+// The pool fills the bore up from the lowest point of the opening (the long-side point of the
+// bevel). Its lower face spans the opening in the bevel plane (held there by surface tension)
+// and its upper free surface is a concave meniscus z(ρ) = s0 − hm·ρ² (ρ = normalised radius,
+// s measured from the proximal end, so the liquid climbs the wall by hm/2 and dips hm/2 at the
+// axis relative to a flat level, keeping the volume of a flat surface at the same mean level).
+// The body replaces the film cells it covers, so its volume is the held pool plus the film in
+// those cells: V_body(s0) = Vpool + Σ film·area over covered cells, solved by bisection.
+// geo: built or serialised geometry. film: per-cell film above the precursor (m) or null.
+// Returns null when there is nothing to draw.
+export function tipPoolBody(geo, Vpool, film = null, opts = {}) {
+  if (!geo || geo.flat || geo.surface !== 'inner' || !(Vpool > 0)) return null;
+  const { Ni, Nj, ds, L, A, B, s, area } = geo;
+  const bv = geo.bevel || { deg: 0, clockDeg: 270, qmax: 0 };
+  const tanB = bv.deg > 0 ? Math.tan(Math.min((bv.deg * Math.PI) / 180, 1.4)) : 0;
+  const cb = ((bv.clockDeg ?? 270) * Math.PI) / 180, aT = A[Ni - 1], bT = B[Ni - 1];
+  const qmax = bv.qmax || Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb));
+  const cutLen = 2 * qmax * tanB;
+  // normalised long-side direction (x = a·X, y = b·Y); u = X·dX + Y·dY runs −1 (short) → 1 (long)
+  const dl = Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb)) || 1, dX = (aT * Math.cos(cb)) / dl, dY = (bT * Math.sin(cb)) / dl;
+  // cumulative F(s) = ∫0^s a b ds' (a column of the unit disc holds a·b·dX·dY·ds; rows are piecewise constant, like the solver)
+  const Fc = new Float64Array(Ni + 1);
+  for (let i = 0; i < Ni; i++) Fc[i + 1] = Fc[i] + A[i] * B[i] * ds;
+  const F = (z) => { if (z <= 0) return 0; if (z >= L) return Fc[Ni]; const i = Math.min(Ni - 1, Math.floor(z / ds)); return Fc[i] + A[i] * B[i] * (z - i * ds); };
+  const sBot = (u) => L - (1 - u) * qmax * tanB; // bevel plane (the opening)
+  const NQ = opts.nq || 48, pts = [];
+  for (let p = 0; p < NQ; p++) for (let q = 0; q < NQ; q++) {
+    const u = -1 + (2 * (p + 0.5)) / NQ, v = -1 + (2 * (q + 0.5)) / NQ, r2 = u * u + v * v;
+    if (r2 <= 1) pts.push(u, r2);
+  }
+  const wq = Math.PI / (pts.length / 2); // equal weights, renormalised so Σw = π (the unit disc) exactly
+  const bodyVol = (s0, hm) => {
+    let V = 0;
+    for (let n = 0; n < pts.length; n += 2) { const z = s0 - hm * pts[n + 1], sb = sBot(pts[n]); if (sb > z) V += F(sb) - F(Math.max(0, z)); }
+    return V * wq;
+  };
+  // the film cell k (wall: ρ = 1) is inside the body if its centre lies below the meniscus line
+  const uCell = new Float64Array(Nj);
+  for (let j = 0; j < Nj; j++) { const ph = geo.phi[j]; uCell[j] = Math.cos(ph) * dX + Math.sin(ph) * dY; }
+  const covered = (s0, hm, k) => { const i = Math.floor(k / Nj), j = k % Nj; return !(geo.voidMask && geo.voidMask[k]) && s[i] >= s0 - hm && s[i] <= sBot(uCell[j]) + 0.5 * ds; };
+  const filmVol = (s0, hm) => { if (!film) return 0; let V = 0; for (let k = 0; k < Ni * Nj; k++) if (film[k] > 0 && covered(s0, hm, k)) V += film[k] * area[k]; return V; };
+  const solve = (hm) => {
+    let lo = Math.max(hm, 0), hi = L + hm; // V_body − target falls as s0 rises
+    for (let it = 0; it < 60; it++) { const mid = 0.5 * (lo + hi); if (bodyVol(mid, hm) > Vpool + filmVol(mid, hm)) lo = mid; else hi = mid; }
+    return 0.5 * (lo + hi);
+  };
+  // meniscus: spherical-cap depth r(1 − sin θ)/cos θ in the tip bore, eased in while the pool is
+  // still only a puddle in the long-side scoop of the bevel
+  const th = Math.min(Math.max(opts.theta ?? 0.5, 0), 1.45), rT = Math.min(aT, bT);
+  const sFlat = solve(0), depth = L - sFlat;
+  const hm = Math.min(rT * (1 - Math.sin(th)) / Math.cos(th), 0.5 * depth) * Math.min(1, depth / Math.max(cutLen + 2 * rT, 1e-12));
+  const s0 = hm > 0 ? solve(hm) : sFlat;
+  const inBody = new Uint8Array(Ni * Nj);
+  for (let k = 0; k < Ni * Nj; k++) inBody[k] = covered(s0, hm, k) ? 1 : 0;
+  const Vfilm = filmVol(s0, hm);
+  return {
+    s0, hm, Vpool, Vfilm, V: bodyVol(s0, hm), inBody, top: s0 - hm, height: L - (s0 - hm),
+    tanB, qmax, cutLen, dX, dY, cb,
+    zTop: (r2) => s0 - hm * r2, sBottom: sBot,
+  };
+}

@@ -91,6 +91,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 ## Done (v0.10.1) — bevel visibility (owner feedback)
 - [x] Outline drawn round the bevelled tip opening, plus a Tip close-up (⌖ button / T key). At true size a 35° bevel on the 1.35 mm-deep tip is only ~1.9 mm of a 36 mm cartridge, so it barely showed at full-part zoom
 
+## Done (v0.11.0) — tip pool drawn to volume (owner priority 1)
+- [x] Meniscus-shaped tip pool body with the solver's volume; see the owner-priority item below
+
 ## Done (v0.10.2) — saved setups get the bevel (owner feedback)
 - [x] The owner's browser restored a cartridge setup saved before the bevel existed (tipBevelDeg 0), so no bevel change showed. Saved and linked setups are now migrated on load: cartridges get the 35° face-to-axis bevel, and other bevels are converted from the old from-square angle
 - [x] Tip close-up is exactly side-on, so the cut shows as a straight line at its true angle
@@ -98,7 +101,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 ## Next
 ### Owner priorities (2026-11-17) — work these first, in order
 - [ ] **Coating volume in 3D, especially at the tip.** Check that what is drawn matches the simulated liquid volume. The rendered coating layer (film plus flooded cells), integrated over the drawn geometry at true scale, should equal the film and pool volumes in the mass balance. Add a test and a UI check.
-  - The tip pool is held as a lumped volume (`pool[1]`) that is drawn by flooding every cell within `poolReach`. Instead, draw it as a meniscus-shaped body whose volume equals the pool (filling up from the long-side point of the bevel, with a curved free surface), and show its volume.
+  - [x] (v0.11.0) The tip pool is drawn as a meniscus-shaped body instead of flooding every cell within `poolReach`. It fills up from the long-side point of the bevel, its lower face spans the opening in the bevel plane, and its free surface is a concave meniscus (spherical-cap depth r(1 − sin θ)/cos θ, as a volume-preserving paraboloid). Its volume is the held pool plus the film in the cells it covers (`tipPoolBody` in `src/core/geometry.js`). The overlay shows both. Tests: analytic square and bevelled tube, an independent voxel count on the SAICCS cartridge (0.3 and 3.5 µL within 1%), and film bookkeeping. `ui-test` checks the drawn body against the solver's pool at the largest-pool frame and takes a tip close-up (`6-tip-pool.png`).
+  - Finding: the oven preset holds up to 6.8 µL at the tip during the cure (plus 1.5 µL of film under it), a 5.3 mm tall body. The old drawing flooded only the last ~2.7 mm (`poolReach`) whatever the volume, so it under-drew the pool by about half. With the heated preset only ~0.1 µL sits in the bevel scoop.
+  - [ ] Drawn-volume check for the whole coating (film layer at true scale + plugs + full bore) against `fs.volume()`.
   - Resolve the tip better: check grid resolution over the ~1.9 mm bevel (only ~6 rows at ns = 120). Consider axial grid refinement toward the tip, and check that the liquid on the exposed bevel face and its edge bead are captured.
   - Plugs and the full bore during fill should show the meniscus shape at the plug ends, not a flat block.
 - [ ] **More realistic graphics.**

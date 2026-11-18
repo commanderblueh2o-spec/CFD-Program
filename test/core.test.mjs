@@ -1,6 +1,7 @@
 import { test, assert, near, run } from './harness.mjs';
 import { PentaSolver, solveDense } from '../src/core/linalg.js';
-import { buildGeometry, parseProfileCSV, profileToCSV } from '../src/core/geometry.js';
+import { buildGeometry, parseProfileCSV, profileToCSV, tipPoolBody } from '../src/core/geometry.js';
+import { getPreset } from '../src/core/presets.js';
 import { FilmSolver } from '../src/core/film.js';
 import { diffSpecs, resampleField, diffStats } from '../src/core/compare.js';
 import { COATINGS, SUBSTRATES, contactAngleOWRK } from '../src/core/materials.js';
@@ -228,6 +229,47 @@ test('A/B comparison: resampling between grids, difference statistics and settin
   assert(ds.some((d) => d.path === 'metrics.zone' && d.a === '[0,10]'), 'array leaf compared whole');
   assert(diffSpecs(sa, JSON.parse(JSON.stringify(sa))).length === 0, 'identical setups');
   return `interp err ${err.toExponential(1)}; ${nanRows} stations beyond a 20 mm part; ${ds.length} setting diffs`;
+});
+
+test('tip pool drawn as a meniscus body: volume matches the held pool (analytic cylinder, voxel check on the cartridge)', () => {
+  // 1) square-ended tube: V = πr²(L − s0) + πr²·hm/2 (paraboloid meniscus)
+  const tube = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2.2, id: 1.4 }, surface: 'inner', grid: { ns: 80, nphi: 16 } });
+  const r = 0.7e-3, V1 = 2e-9, b1 = tipPoolBody(tube, V1, null, { theta: 0.5 });
+  near(b1.V, V1, 2e-3, 'square tip body volume');
+  near(Math.PI * r * r * (tube.L - b1.s0 + b1.hm / 2), V1, 3e-3, 'square tip analytic');
+  assert(b1.hm > 0.2 * r, 'meniscus drawn');
+  // 2) bevelled tube, pool above the short side: V = πr²(L − s0 + hm/2) − πr²·qmax·tanβ (the cut wedge)
+  const bev = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2.2, id: 1.4, tipBevelDeg: 35 }, surface: 'inner', grid: { ns: 80, nphi: 16 } });
+  const V2 = 4e-9, b2 = tipPoolBody(bev, V2, null, { theta: 0.5 });
+  assert(b2.s0 < bev.L - b2.cutLen, 'pool reaches above the short side');
+  near(Math.PI * r * r * (bev.L - b2.s0 + b2.hm / 2) - Math.PI * r * r * b2.qmax * b2.tanB, V2, 4e-3, 'bevel analytic');
+  // 3) the SAICCS cartridge (taper, oval bore, 35° bevel on the floor): independent voxel count
+  //    using the geometry's own cut rule, for a puddle in the bevel scoop and a full tip pool
+  const spec = getPreset('saiccs_ha_heated');
+  const geo = buildGeometry({ ...spec, grid: { ns: 120, nphi: 32 } });
+  const { Ni, ds, L, A, B } = geo, cb = (geo.bevel.clockDeg * Math.PI) / 180, qmax = geo.bevel.qmax, tb = Math.tan(Math.min((geo.bevel.deg * Math.PI) / 180, 1.4));
+  const out = [];
+  for (const Vp of [0.3e-9, 3.5e-9]) {
+    const body = tipPoolBody(geo, Vp, null, { theta: 0.6 });
+    near(body.V, Vp, 3e-3, 'cartridge body volume');
+    let Vv = 0; const NX = 70, NS = 400, z0 = body.top - ds;
+    for (let n = 0; n < NS; n++) {
+      const sz = z0 + ((n + 0.5) / NS) * (L - z0), i = Math.min(Ni - 1, Math.floor(sz / ds)), a = A[i], b = B[i], qi = Math.hypot(a * Math.cos(cb), b * Math.sin(cb));
+      for (let p = 0; p < NX; p++) for (let q = 0; q < NX; q++) {
+        const X = -1 + (2 * (p + 0.5)) / NX, Y = -1 + (2 * (q + 0.5)) / NX, r2 = X * X + Y * Y; if (r2 > 1) continue;
+        const qT = ((a * X * Math.cos(cb) + b * Y * Math.sin(cb)) / qi) * qmax;
+        if (sz > L - (qmax - qT) * tb || sz < body.zTop(r2)) continue;
+        Vv += a * b * (4 / (NX * NX)) * ((L - z0) / NS);
+      }
+    }
+    near(Vv, Vp, 0.02, 'voxel volume');
+    out.push(`${(Vp * 1e9).toFixed(1)} µL → voxel ${(Vv * 1e9).toFixed(3)}, ${(body.height * 1e3).toFixed(2)} mm tall`);
+  }
+  // 4) film in the covered cells is part of the body: V = pool + film there
+  const film = new Float64Array(geo.N).fill(20e-6), body = tipPoolBody(geo, 2e-9, film, { theta: 0.6 });
+  let Vf = 0; for (let k = 0; k < geo.N; k++) if (body.inBody[k]) Vf += film[k] * geo.area[k];
+  near(body.Vfilm, Vf, 1e-9, 'film in body'); near(body.V, 2e-9 + Vf, 0.01, 'pool + film');
+  return out.join('; ');
 });
 
 run();

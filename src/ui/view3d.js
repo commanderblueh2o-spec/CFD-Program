@@ -53,6 +53,7 @@ export class View3D {
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(),
       kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
+      ppos: gl.createBuffer(), pnrm: gl.createBuffer(), pcol: gl.createBuffer(), pcut: gl.createBuffer(), pgloss: gl.createBuffer(),
       lpos: gl.createBuffer(), lcol: gl.createBuffer() };
     this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.tgt = [0, 0, 0];
     this.cutaway = true; this.exag = 0; this.secZ = null; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
@@ -255,7 +256,8 @@ export class View3D {
   // standing off it by the film thickness × this.exag (1 = true scale). Flooded cells (`fill`:
   // full bore, plugs, tip pool) fill the bore to the axis. Where a bore is cut open, caps on
   // the cut plane show the coating thickness (coloured band) and the wall (grey band).
-  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null) {
+  // pool: a tipPoolBody() result (meniscus-shaped liquid body at the tip), drawn as its own mesh.
+  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null, pool = null) {
     const geo = this.geo; if (!geo || !this.gl) return;
     const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols, SUB = this.SUB, R = this.radial;
     const inner = geo.surface === 'inner' && !geo.flat;
@@ -358,6 +360,7 @@ export class View3D {
       }
     }
     this.nCap = kp.length / 3;
+    this.buildPool(pool, cc, cg);
     {
       const Mm = this.modelMatrix(), pw = new Float32Array(pos.length);
       for (let v = 0; v < pos.length; v += 3) for (let c = 0; c < 3; c++) pw[v + c] = Mm[c] * cpos[v] + Mm[4 + c] * cpos[v + 1] + Mm[8 + c] * cpos[v + 2] + Mm[12 + c];
@@ -368,6 +371,67 @@ export class View3D {
     if (this.nCap) { this.upload('kpos', new Float32Array(kp)); this.upload('knrm', new Float32Array(kn)); this.upload('kcol', new Float32Array(kc)); this.upload('kgloss', new Float32Array(kg)); }
     this.markers = markers;
     this.render();
+  }
+
+  // Mesh for the tip pool (see tipPoolBody in core/geometry.js): the meniscus free surface
+  // z(ρ) = s0 − hm ρ², the lower face spanning the opening in the bevel plane, and its section
+  // on the cut-open plane. Built in the unit disc of the local ellipse, so the drawn body
+  // has the computed volume (the radius magnifier scales x and y only).
+  buildPool(pool, cc, cg) {
+    this.nPool = 0; this.poolInfo = null;
+    const geo = this.geo;
+    if (!pool || !geo || geo.flat || geo.surface !== 'inner') return;
+    const { Ni, ds, A, B, L } = geo, R = this.radial, [n0, n1] = this.cutN;
+    let rgb = pool.rgb, gloss = pool.gloss ?? 1;
+    if (!rgb) { // mean colour of the cells the body covers
+      rgb = [0, 0, 0]; let c = 0; gloss = 0;
+      for (let k = 0; k < pool.inBody.length; k++) if (pool.inBody[k]) { for (let q = 0; q < 3; q++) rgb[q] += cc[3 * k + q]; gloss += cg[k]; c++; }
+      if (!c) return; rgb = rgb.map((x) => x / c); gloss /= c;
+    }
+    const P = (u, v, s) => { const i = Math.max(0, Math.min(Ni - 1, Math.floor(s / ds))), X = u * pool.dX - v * pool.dY, Y = u * pool.dY + v * pool.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
+    const tp = [], tn = [];
+    const NR = 20, NM = 72;
+    for (const face of ['top', 'bottom']) {
+      const G = [];
+      for (let k = 0; k <= NR; k++) {
+        const row = [], rho = k / NR;
+        for (let m = 0; m <= NM; m++) {
+          const ps = (2 * Math.PI * m) / NM, u = rho * Math.cos(ps), v = rho * Math.sin(ps), sb = pool.sBottom(u);
+          row.push(P(u, v, face === 'top' ? Math.min(pool.zTop(rho * rho), sb) : sb));
+        }
+        G.push(row);
+      }
+      const N = G.map((row, k) => row.map((p, m) => {
+        const kk = Math.max(1, k), a = G[Math.min(NR, kk + 1)][m], b = G[kk - 1][m], c = G[kk][(m + 1) % NM], d = G[kk][(m + NM - 1) % NM];
+        const t1 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]], t2 = [c[0] - d[0], c[1] - d[1], c[2] - d[2]];
+        return norm(cross(t1, t2));
+      }));
+      for (let k = 0; k < NR; k++) for (let m = 0; m < NM; m++) {
+        for (const [kk, mm] of [[k, m], [k + 1, m], [k + 1, m + 1], [k, m], [k + 1, m + 1], [k, m + 1]]) { tp.push(...G[kk][mm]); tn.push(...N[kk][mm]); }
+      }
+    }
+    const nSurf = tp.length / 3;
+    // section of the body on the cut-open plane (only when cut open)
+    if (this.cutaway) {
+      const aT = A[Ni - 1], bT = B[Ni - 1], cb = pool.cb;
+      let eX = Math.cos(cb) / aT, eY = Math.sin(cb) / bT; const el = Math.hypot(eX, eY) || 1; eX /= el; eY /= el;
+      const NT = 64, NZ = 12, col = [];
+      for (let q = 0; q <= NT; q++) {
+        const tt = -1 + (2 * q) / NT, X = tt * eX, Y = tt * eY, u = X * pool.dX + Y * pool.dY, v = -X * pool.dY + Y * pool.dX, sb = pool.sBottom(u), z = Math.min(pool.zTop(tt * tt), sb);
+        const c = []; for (let r = 0; r <= NZ; r++) c.push(P(u, v, z + ((sb - z) * r) / NZ)); col.push(c);
+      }
+      for (let q = 0; q < NT; q++) for (let r = 0; r < NZ; r++) {
+        for (const [qq, rr] of [[q, r], [q + 1, r], [q + 1, r + 1], [q, r], [q + 1, r + 1], [q, r + 1]]) { tp.push(...col[qq][rr]); tn.push(n0, n1, 0); }
+      }
+    }
+    const n = tp.length / 3, pcol = new Float32Array(3 * n), pcut = new Float32Array(n), pg = new Float32Array(n).fill(gloss);
+    for (let v = 0; v < n; v++) {
+      for (let q = 0; q < 3; q++) pcol[3 * v + q] = rgb[q];
+      pcut[v] = v < nSurf ? tp[3 * v] * n0 + tp[3 * v + 1] * n1 : -1; // the plane section itself is never cut
+    }
+    this.upload('ppos', new Float32Array(tp)); this.upload('pnrm', new Float32Array(tn)); this.upload('pcol', pcol); this.upload('pcut', pcut); this.upload('pgloss', pg);
+    this.nPool = n;
+    this.poolInfo = { V: pool.V, Vpool: pool.Vpool, Vfilm: pool.Vfilm, height: pool.height, hm: pool.hm };
   }
 
   // Animated process effects: [{kind:'air'|'cross'|'needle'|'spray'|'bath', ...}]
@@ -521,6 +585,13 @@ export class View3D {
       bindA('kpos', this.loc.aPos, 3); bindA('knrm', this.loc.aNrm, 3); bindA('kcol', this.loc.aCol, 3); bindA('kgloss', this.loc.aGloss, 1);
       gl.disableVertexAttribArray(this.loc.aCut); gl.vertexAttrib1f(this.loc.aCut, -1);
       gl.drawArrays(gl.TRIANGLES, 0, this.nCap);
+    }
+    // liquid pool body at the tip (in front of the coplanar film caps)
+    if (this.nPool) {
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -8);
+      bindA('ppos', this.loc.aPos, 3); bindA('pnrm', this.loc.aNrm, 3); bindA('pcol', this.loc.aCol, 3); bindA('pcut', this.loc.aCut, 1); bindA('pgloss', this.loc.aGloss, 1);
+      gl.drawArrays(gl.TRIANGLES, 0, this.nPool);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
     }
     // lines (no depth test so markers are always visible)
     const lines = this.buildLines(performance.now());

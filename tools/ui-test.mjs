@@ -45,5 +45,24 @@ await page.click('#tabs button[data-tab=v3d]');
 await page.click('.stage-head');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/5-stage-open.png` });
+
+// Tip pool: the drawn meniscus body must hold the solver's pool (plus the film it covers)
+const poolCheck = await page.evaluate(() => {
+  const st = window.coatsimState, fr = st.result.frames, el = document.querySelector('#frame');
+  let best = -1, bv = 0;
+  fr.forEach((f, q) => { const v = f.aux && f.aux.pool ? f.aux.pool[1] : 0; if (v > bv) { bv = v; best = q; } });
+  if (best < 0) return null;
+  el.value = Math.round((best / (fr.length - 1)) * el.max); el.dispatchEvent(new Event('input'));
+  const info = window.coatsimView.poolInfo;
+  return info && { frame: best, pool: bv, ...info };
+});
+if (poolCheck) {
+  const err = Math.abs(poolCheck.V - poolCheck.Vpool - poolCheck.Vfilm) / poolCheck.V;
+  console.log(`tip pool: solver ${(poolCheck.pool * 1e9).toFixed(3)} µL, drawn body ${(poolCheck.V * 1e9).toFixed(3)} µL (pool ${(poolCheck.Vpool * 1e9).toFixed(3)} + covered film ${(poolCheck.Vfilm * 1e9).toFixed(3)}), ${(poolCheck.height * 1e3).toFixed(2)} mm tall, err ${(err * 100).toFixed(2)}%`);
+  if (Math.abs(poolCheck.Vpool - poolCheck.pool) > 1e-6 * poolCheck.pool || err > 0.01) errors.push('drawn tip pool volume does not match the solver');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.coatsimView.tipView()); await page.waitForTimeout(300);
+  await page.screenshot({ path: `${out}/6-tip-pool.png` });
+} else console.log('tip pool: none held during this run');
 console.log('errors:', errors.length ? errors : 'none');
 await browser.close();
