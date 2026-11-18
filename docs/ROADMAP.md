@@ -88,6 +88,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 - [x] Thickness slider: log scale from true scale up to max(20× auto, ×2000); auto draws the run's 95th-percentile film/radius at a third of the bore radius; the factor is shown next to the slider and in the overlay
 - [x] Section slider: slices the part across at any height and draws the coating and wall as rings
 
+## Done (v0.10.1) — bevel visibility (owner feedback)
+- [x] Outline drawn round the bevelled tip opening, plus a Tip close-up (⌖ button / T key). At true size a 35° bevel on the 1.35 mm-deep tip is only ~1.9 mm of a 36 mm cartridge, so it barely showed at full-part zoom
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

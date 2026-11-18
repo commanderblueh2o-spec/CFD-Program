@@ -93,12 +93,25 @@ export class View3D {
     this.canvas.addEventListener('keydown', (e) => {
       if (e.key === 'F6' || e.key === 'f') { e.preventDefault(); this.fitView(); }
       else if (e.key === 'Home' || e.key === 'h') { e.preventDefault(); this.resetView(); }
+      else if (e.key === 't') { e.preventDefault(); this.tipView(); }
     });
     this.canvas.addEventListener('pointerenter', () => this.canvas.focus({ preventScroll: true }));
     new ResizeObserver(() => this.render()).observe(this.el);
   }
 
   resetView() { this.autoCamera(true); this.render(); }
+  // Close-up of the tip, side-on to the bevel
+  tipView() {
+    const geo = this.geo; if (!geo) return;
+    this.autoCamera(true);
+    const bv = geo.bevel, R = this.radial, rT = Math.max(geo.A[geo.Ni - 1], geo.B[geo.Ni - 1] || 0);
+    const cutLen = bv && bv.deg > 0 ? 2 * bv.qmax * Math.tan((bv.deg * Math.PI) / 180) : 0;
+    const zc = geo.L - 0.5 * cutLen - 1.5 * rT, Mm = this.modelMatrix();
+    this.tgt = [Mm[8] * zc + Mm[12], Mm[9] * zc + Mm[13], Mm[10] * zc + Mm[14]];
+    this.pitch = 0.12;
+    this.dist = Math.max(0.05, ((3 * cutLen + 8 * rT * R) * this.scale) / 0.78);
+    this.render();
+  }
   fitView() { const y = this.yaw, p = this.pitch; this.autoCamera(true); this.yaw = y; this.pitch = p; this.render(); }
   _dragMode(e) { return (e.button === 1 && !e.shiftKey) || e.button === 2 ? 'pan' : 'orbit'; }
   _basis() {
@@ -375,6 +388,13 @@ export class View3D {
   buildLines(now) {
     const geo = this.geo, lp = [], lc = [];
     const seg = (a, b, rgb) => { lp.push(...a, ...b); lc.push(...rgb, ...rgb); };
+    // outline of the bevelled tip opening, so the cut reads even at full-part zoom
+    if (geo.bevel && geo.bevel.deg > 0 && !geo.flat) {
+      const rim = [];
+      for (let u = 0; u < this.cols; u++) { const P = this.vertex(geo.Ni - 1, u, 0); rim.push([P.x, P.y, P.z]); }
+      const hidden = (P) => this.cutaway && geo.surface === 'inner' && P[0] * this.cutN[0] + P[1] * this.cutN[1] > 1e-9;
+      for (let u = 0; u < rim.length - 1; u++) if (!hidden(rim[u]) || !hidden(rim[u + 1])) seg(rim[u], rim[u + 1], [1.0, 0.82, 0.35]);
+    }
     for (const m of this.markers || []) {
       if (m.s === null || m.s === undefined || !isFinite(m.s)) continue;
       const [a, b] = this.ringAt(m.s), segs = 48, rgb = m.rgb || [1, 1, 1];

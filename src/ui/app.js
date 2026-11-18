@@ -1096,6 +1096,7 @@ function init() {
   $('#resetView').addEventListener('click', () => view3d.resetView());
   $('#navHome').addEventListener('click', () => view3d.resetView());
   $('#navFit').addEventListener('click', () => view3d.fitView());
+  $('#navTip').addEventListener('click', () => view3d.tipView());
   // the help panel starts open once, then remembers whether the user collapsed it
   try { const d = $('#navhelp details'); if (localStorage.getItem('coatsim.navhelp') === 'closed') d.open = false; d.addEventListener('toggle', () => localStorage.setItem('coatsim.navhelp', d.open ? 'open' : 'closed')); } catch (e) { /* storage unavailable */ }
   $('#viewOpts').addEventListener('click', (e) => { e.stopPropagation(); $('#viewPanel').hidden = !$('#viewPanel').hidden; });
