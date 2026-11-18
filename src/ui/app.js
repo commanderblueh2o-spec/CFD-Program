@@ -1061,8 +1061,21 @@ function menuAction(act) {
 // ---------------------------------------------------------------- init
 let view3d, heatmap, chAxial, chCirc, chThick, chCure, chTemp, chVisc, swA, swB, swC;
 
+// Setups saved before v0.9 used the old bevel convention (angle from a square cut) and
+// cartridges saved before the bevel existed have none. Bring them up to date: a cartridge
+// gets the standard 35° bevel (face to axis) with its long side on the floor, and any other
+// bevel is converted to the face-to-axis angle.
+function migrateSpec(spec) {
+  if (spec.bevelConv === 2 || !spec.geometry) return;
+  const g = spec.geometry;
+  if (g.type === 'iol_cartridge') { g.tipBevelDeg = 35; g.bevelClockDeg = g.bevelClockDeg ?? 270; }
+  else if (g.tipBevelDeg > 0 && g.tipBevelDeg < 90) g.tipBevelDeg = 90 - g.tipBevelDeg;
+  spec.bevelConv = 2;
+}
+
 function setSpec(spec) {
   setPlaying(false);
+  spec.bevelConv = 2;
   state.spec = spec;
   state.spec.stages = state.spec.stages || [];
   state.openStage = -1;
@@ -1144,6 +1157,7 @@ function init() {
   const fromHash = specFromHash();
   let initial = fromHash || loadLocal();
   if (initial && initial.stages && initial.stages.some((s) => !STAGE_SCHEMAS[s.type])) initial = null;
+  if (initial) migrateSpec(initial);
   setSpec(initial || Object.assign(getPreset(PRESETS[0].id), { presetId: PRESETS[0].id }));
   if (fromHash) history.replaceState(null, '', location.pathname);
 }

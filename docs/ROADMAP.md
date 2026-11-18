@@ -91,6 +91,10 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 ## Done (v0.10.1) — bevel visibility (owner feedback)
 - [x] Outline drawn round the bevelled tip opening, plus a Tip close-up (⌖ button / T key). At true size a 35° bevel on the 1.35 mm-deep tip is only ~1.9 mm of a 36 mm cartridge, so it barely showed at full-part zoom
 
+## Done (v0.10.2) — saved setups get the bevel (owner feedback)
+- [x] The owner's browser restored a cartridge setup saved before the bevel existed (tipBevelDeg 0), so no bevel change showed. Saved and linked setups are now migrated on load: cartridges get the 35° face-to-axis bevel, and other bevels are converted from the old from-square angle
+- [x] Tip close-up is exactly side-on, so the cut shows as a straight line at its true angle
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

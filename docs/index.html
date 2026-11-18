@@ -3701,7 +3701,8 @@ class View3D {
     const cutLen = bv && bv.deg > 0 ? 2 * bv.qmax * Math.tan((bv.deg * Math.PI) / 180) : 0;
     const zc = geo.L - 0.5 * cutLen - 1.5 * rT, Mm = this.modelMatrix();
     this.tgt = [Mm[8] * zc + Mm[12], Mm[9] * zc + Mm[13], Mm[10] * zc + Mm[14]];
-    this.pitch = 0.12;
+    // exactly side-on: the bevel plane is seen edge-on, so the cut is a straight line at its true angle
+    const n = this.cutN || [0, 1]; this.yaw = Math.atan2(n[1], n[0]); this.pitch = 0;
     this.dist = Math.max(0.05, ((3 * cutLen + 8 * rT * R) * this.scale) / 0.78);
     this.render();
   }
@@ -4159,7 +4160,7 @@ const {  } = (() => {
 
 
 
-const VERSION = '0.10.1';
+const VERSION = '0.10.2';
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, html = '') => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (html) e.innerHTML = html; return e; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -5209,8 +5210,21 @@ function menuAction(act) {
 // ---------------------------------------------------------------- init
 let view3d, heatmap, chAxial, chCirc, chThick, chCure, chTemp, chVisc, swA, swB, swC;
 
+// Setups saved before v0.9 used the old bevel convention (angle from a square cut) and
+// cartridges saved before the bevel existed have none. Bring them up to date: a cartridge
+// gets the standard 35° bevel (face to axis) with its long side on the floor, and any other
+// bevel is converted to the face-to-axis angle.
+function migrateSpec(spec) {
+  if (spec.bevelConv === 2 || !spec.geometry) return;
+  const g = spec.geometry;
+  if (g.type === 'iol_cartridge') { g.tipBevelDeg = 35; g.bevelClockDeg = g.bevelClockDeg ?? 270; }
+  else if (g.tipBevelDeg > 0 && g.tipBevelDeg < 90) g.tipBevelDeg = 90 - g.tipBevelDeg;
+  spec.bevelConv = 2;
+}
+
 function setSpec(spec) {
   setPlaying(false);
+  spec.bevelConv = 2;
   state.spec = spec;
   state.spec.stages = state.spec.stages || [];
   state.openStage = -1;
@@ -5292,6 +5306,7 @@ function init() {
   const fromHash = specFromHash();
   let initial = fromHash || loadLocal();
   if (initial && initial.stages && initial.stages.some((s) => !STAGE_SCHEMAS[s.type])) initial = null;
+  if (initial) migrateSpec(initial);
   setSpec(initial || Object.assign(getPreset(PRESETS[0].id), { presetId: PRESETS[0].id }));
   if (fromHash) history.replaceState(null, '', location.pathname);
 }

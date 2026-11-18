@@ -108,7 +108,8 @@ export class View3D {
     const cutLen = bv && bv.deg > 0 ? 2 * bv.qmax * Math.tan((bv.deg * Math.PI) / 180) : 0;
     const zc = geo.L - 0.5 * cutLen - 1.5 * rT, Mm = this.modelMatrix();
     this.tgt = [Mm[8] * zc + Mm[12], Mm[9] * zc + Mm[13], Mm[10] * zc + Mm[14]];
-    this.pitch = 0.12;
+    // exactly side-on: the bevel plane is seen edge-on, so the cut is a straight line at its true angle
+    const n = this.cutN || [0, 1]; this.yaw = Math.atan2(n[1], n[0]); this.pitch = 0;
     this.dist = Math.max(0.05, ((3 * cutLen + 8 * rT * R) * this.scale) / 0.78);
     this.render();
   }
