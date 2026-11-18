@@ -54,7 +54,7 @@ export const GEOMETRY_SCHEMAS = {
 };
 
 const env = [
-  f('tilt', 'Axis tilt from vertical', '°', 0, 180, 1, '0 = vertical with s = 0 at the top; 90 = horizontal.'),
+  f('tilt', 'Axis tilt from vertical', '°', 0, 180, 1, '0 = vertical with s = 0 at the top (an IOL cartridge then stands proximal end up, tip down; this is its default); 90 = horizontal.'),
   f('tempC', 'Room / oven temperature', '°C', -10, 250, 1, 'Air temperature around the part; the part follows it with the heat-up lag.'),
   f('rpm', 'Part rotation', 'rpm', 0, 600, 1, 'Rotation about the part axis (0 = stationary).'),
   f('ambientAir', 'Ambient air speed', 'm/s', 0, 30, 0.1, 'Background air movement (evaporation).'),

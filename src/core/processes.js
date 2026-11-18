@@ -26,7 +26,10 @@ export const STAGE_DEFAULTS = {
   cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 0, rpm: 0, ambientAir: 0.3 },
 };
 
-export function withDefaults(stage) { return { ...STAGE_DEFAULTS[stage.type], ...stage }; }
+// IOL cartridges stand vertical with the wide proximal end up and the tip down (tilt 0,
+// s = 0 at the top) unless a stage says otherwise; other parts use the per-stage default.
+export function defaultTilt(type, geometry) { return geometry && geometry.type === 'iol_cartridge' ? 0 : (STAGE_DEFAULTS[type] || {}).tilt ?? 90; }
+export function withDefaults(stage, geometry) { return { ...STAGE_DEFAULTS[stage.type], tilt: defaultTilt(stage.type, geometry), ...stage }; }
 
 function airShear(U, D) {
   if (!(U > 0)) return 0;
@@ -906,7 +909,7 @@ export function simulate(spec, cb = {}) {
   const ctx = makeContext(spec);
   ctx.warnings = [];
   const { fs, geo } = ctx;
-  const stages = (spec.stages || []).map(withDefaults);
+  const stages = (spec.stages || []).map((st) => withDefaults(st, spec.geometry));
   const frames = [], history = [];
   const stageInfo = [];
   const framesPerStage = spec.framesPerStage || 36;

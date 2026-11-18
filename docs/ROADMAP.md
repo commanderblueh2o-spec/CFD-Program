@@ -72,6 +72,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 - [x] Smooth 3D model: the exact elliptical section with 4× circumferential subdivision, blended colours, and vertices clamped onto the cut plane (no stepped bevel); the surface map is interpolated
 - [x] Fusion 360 camera: middle-drag pan, Shift + middle-drag orbit, wheel zoom about the surface under the cursor (the orbit pivot lands on the part), double-click middle / F6 to fit, Home / H for the home view; a controls panel and Home/Fit buttons in the corner
 
+## Done (v0.8.2) — cartridge orientation (owner request)
+- [x] IOL cartridges default to vertical, wide proximal end up and tip down, in every stage: on presets, when the part is switched to a cartridge, for newly added stages, and in the solver's stage defaults
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

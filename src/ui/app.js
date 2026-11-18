@@ -4,7 +4,7 @@ import { SUBSTRATES, COATINGS, contactAngleOWRK, wenzel, resolveCoating, resolve
 import { buildGeometry, parseProfileCSV, profileToCSV } from '../core/geometry.js';
 import { capillaryLength } from '../core/physics.js';
 import { GEOMETRY_SCHEMAS, STAGE_SCHEMAS, SUBSTRATE_OVERRIDES, FIELDS } from './schema.js';
-import { STAGE_DEFAULTS } from '../core/processes.js';
+import { STAGE_DEFAULTS, withDefaults, defaultTilt } from '../core/processes.js';
 import { SERIES, COLORMAPS, gradientCSS, fmt, niceRange, colorAt } from './colormap.js';
 import { LineChart } from './charts.js';
 import { Heatmap } from './heatmap.js';
@@ -105,6 +105,8 @@ function renderGeometry() {
   box.append(numberRow({ key: 'type', label: 'Part', kind: 'select', options: Object.entries(GEOMETRY_SCHEMAS).map(([k, v]) => [k, v.name]) }, g.type, (v) => {
     state.spec.geometry = { type: v, ...JSON.parse(JSON.stringify(GEOMETRY_SCHEMAS[v].defaults)) };
     if (v === 'coupon') state.spec.surface = 'outer';
+    // a cartridge stands proximal end up, tip down, in every stage
+    if (v === 'iol_cartridge') for (const st of state.spec.stages) st.tilt = 0;
     state.spec.metrics = { zone: null };
     renderGeometry(); renderAdvanced(); changed(); previewGeometry();
   }));
@@ -229,7 +231,7 @@ function renderMaterialInfo() {
 
 // ---------------------------------------------------------------- Process stages
 function stageSummary(st) {
-  const s = { ...STAGE_DEFAULTS[st.type], ...st };
+  const s = withDefaults(st, state.spec.geometry);
   switch (st.type) {
     case 'plasma': return `${s.duration} s`;
     case 'dip': return s.mode === 'ramp' ? `${s.speed}→${s.speedEnd} mm/s ramp` : s.mode === 'steps' ? `${s.speed}/${s.speed2}/${s.speedEnd} mm/s steps` : `${s.speed} mm/s`;
@@ -248,7 +250,7 @@ function jetScfh(s) { if (s.crossJetScfh > 0) return s.crossJetScfh; if (s.cross
 function updateStageSummaries() { document.querySelectorAll('.stage').forEach((n, i) => { const st = state.spec.stages[i]; if (st) n.querySelector('.sum').textContent = stageSummary(st); }); }
 
 function fieldVisible(st, d) {
-  const vals = { ...STAGE_DEFAULTS[st.type], ...st };
+  const vals = withDefaults(st, state.spec.geometry);
   if (d.mode && vals.mode !== d.mode) return false;
   if (d.modes && !d.modes.includes(vals.mode)) return false;
   if (d.cure && vals.mode !== d.cure) return false;
@@ -277,7 +279,7 @@ function renderStages() {
     if (state.openStage === i) {
       const body = el('div', { class: 'stage-body' });
       body.append(el('div', { class: 'hint' }, esc(sch.help)));
-      const vals = { ...STAGE_DEFAULTS[st.type], ...st };
+      const vals = withDefaults(st, state.spec.geometry);
       const set = (d) => (v, dragging) => {
         st[d.key] = v;
         // first switch to a dip speed profile: start from a sensible slow-down of the current speed
@@ -349,7 +351,7 @@ function previewGeometry(force) {
     const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm), voidMask: geo.voidMask, edgeEnd: geo.edgeEnd, bevel: geo.bevel };
     view3d.setGeometry(sg);
     const st0 = state.spec.stages[0];
-    view3d.tilt = st0 ? st0.tilt ?? STAGE_DEFAULTS[st0.type].tilt ?? 90 : 90;
+    view3d.tilt = st0 ? st0.tilt ?? defaultTilt(st0.type, state.spec.geometry) : defaultTilt('dwell', state.spec.geometry);
     view3d.setEffects([]);
     view3d.setField(new Float32Array(geo.N), [0, 1], state.cmap, null, [], new Uint8Array(geo.N).fill(1));
     $('#empty3d').style.display = state.result ? 'none' : 'flex';
@@ -541,7 +543,7 @@ function markersOf(fr) {
   return out;
 }
 
-function stageOf(fr) { return fr.stage >= 0 ? { ...STAGE_DEFAULTS[state.result.spec.stages[fr.stage].type], ...state.result.spec.stages[fr.stage] } : null; }
+function stageOf(fr) { return fr.stage >= 0 ? withDefaults(state.result.spec.stages[fr.stage], state.result.spec.geometry) : null; }
 
 // What is happening, in plain words, plus the visual effects for the 3D view
 function activityOf(fr, st) {
@@ -603,7 +605,7 @@ function updateViews() {
   const rref = Math.max(...res.geometry.A) || res.geometry.L * 0.05;
   view3d.exag = ex > 0 ? (ex / 100) * (0.35 * rref) / Math.max(hmax, 4 * res._wetRef) : 0;
   view3d.cutaway = $('#cutaway').checked;
-  view3d.tilt = st ? st.tilt ?? 90 : (res.spec.stages[0]?.tilt ?? STAGE_DEFAULTS[res.spec.stages[0]?.type]?.tilt ?? 90);
+  view3d.tilt = st ? st.tilt ?? defaultTilt(st.type, res.spec.geometry) : (res.spec.stages[0]?.tilt ?? defaultTilt(res.spec.stages[0]?.type, res.spec.geometry));
   let bare = null;
   if (!['theta', 'temp', 'diff'].includes(state.field)) { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) && !(fr.aux?.pool && fr.aux.pool[1] > 1e-12 && res.geometry.edgeEnd && res.geometry.edgeEnd[k] >= 0 && res.geometry.edgeEnd[k] <= res.geometry.poolReach[1]) ? 1 : 0; }
   const act = activityOf(fr, st);
@@ -813,8 +815,8 @@ function describeDiffs(a, b) {
       const sa = a.stages[i], sb = b.stages[i], name = sb.label || STAGE_SCHEMAS[sb.type]?.name || sb.type;
       if (key === 'type' || sa.type !== sb.type) { if (!seen.has('t' + i)) out.push({ label: `Stage ${i + 1}`, a: sa.label || STAGE_SCHEMAS[sa.type]?.name, b: name }); seen.add('t' + i); continue; }
       if (key === 'label') continue;
-      const f = STAGE_SCHEMAS[sb.type]?.fields.find((x) => x.key === key), def = STAGE_DEFAULTS[sb.type] || {};
-      const va = sa[key] ?? def[key], vb = sb[key] ?? def[key];
+      const f = STAGE_SCHEMAS[sb.type]?.fields.find((x) => x.key === key), defA = withDefaults({ type: sa.type }, a.geometry), defB = withDefaults({ type: sb.type }, b.geometry);
+      const va = sa[key] ?? defA[key], vb = sb[key] ?? defB[key];
       if (va === vb || seen.has(i + key)) continue; seen.add(i + key);
       const opt = (v) => f?.options?.find((o) => o[0] === v)?.[1];
       out.push({ label: `${name} — ${f ? f.label : key}`, a: opt(va) ?? val(va, 1, f?.unit), b: opt(vb) ?? val(vb, 1, f?.unit) });
@@ -935,7 +937,7 @@ function sweepParams() {
   const out = [];
   const sp = state.spec;
   sp.stages.forEach((st, i) => {
-    for (const d of STAGE_SCHEMAS[st.type].fields) if (d.kind !== 'select' && !d.optional && fieldVisible(st, d)) out.push({ id: `stage:${i}:${d.key}`, label: `${st.label || STAGE_SCHEMAS[st.type].name} — ${d.label}`, unit: d.unit, get: (s) => ({ ...STAGE_DEFAULTS[s.stages[i].type], ...s.stages[i] })[d.key], set: (s, v) => { s.stages[i][d.key] = v; } });
+    for (const d of STAGE_SCHEMAS[st.type].fields) if (d.kind !== 'select' && !d.optional && fieldVisible(st, d)) out.push({ id: `stage:${i}:${d.key}`, label: `${st.label || STAGE_SCHEMAS[st.type].name} — ${d.label}`, unit: d.unit, get: (s) => withDefaults(s.stages[i], s.geometry)[d.key], set: (s, v) => { s.stages[i][d.key] = v; } });
   });
   for (const c of coatingSliders()) {
     out.push({ id: `coat:${c.id}`, label: `Coating — ${c.def.label}`, unit: c.def.unit, get: () => c.get(), set: (s, v) => { const saved = state.spec; state.spec = s; coatingSliders().find((x) => x.id === c.id).set(v); state.spec = saved; } });
@@ -1080,7 +1082,8 @@ function init() {
   $('#addStage').addEventListener('click', () => {
     const t = typeSel.value; const prev = state.spec.stages[state.spec.stages.length - 1];
     const st = { type: t };
-    if (prev && prev.tilt !== undefined) st.tilt = prev.tilt;
+    if (state.spec.geometry.type === 'iol_cartridge') st.tilt = 0;
+    else if (prev && prev.tilt !== undefined) st.tilt = prev.tilt;
     state.spec.stages.push(st); state.openStage = state.spec.stages.length - 1; renderStages(); changed(); renderSweepForm();
   });
   $('#tabs').addEventListener('click', (e) => {
