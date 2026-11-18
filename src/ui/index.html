@@ -54,7 +54,8 @@
     </nav>
     <div class="viewbar" id="viewbar">
       <label>Show <select id="field"></select></label>
-      <label class="v3only" title="Exaggerate film thickness in 3D">Film relief <input type="range" id="exag" min="0" max="100" value="45"></label>
+      <label class="v3only" title="Coating drawn as its own layer on the wall. Far left = true scale; the films are microns thick on a millimetre bore, so it is magnified by default">Thickness <input type="range" id="exag" min="0" max="100" value="50"> <span id="exagVal" class="muted"></span></label>
+      <label class="v3only" title="Slice the part across at a height to see the coating thickness as a ring (left = off)">Section <input type="range" id="section" min="0" max="100" value="0"> <span id="sectionVal" class="muted">off</span></label>
       <label class="v3only chk" title="Cut the part open to see inside the bore"><input type="checkbox" id="cutaway" checked> Cut open</label>
       <div class="menu v3only">
         <button class="btn small" id="viewOpts" title="View options">⚙</button>

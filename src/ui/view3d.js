@@ -6,13 +6,14 @@ import { colorAt } from './colormap.js';
 
 const VS = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss;
-uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG;
-void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; gl_PointSize=3.0; }`;
+uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS;
+void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vS=aPos.z; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; gl_PointSize=3.0; }`;
 const FS = `
-precision mediump float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG;
-uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat;
+precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS;
+uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec;
 void main(){
-  if (uCut > 0.5 && vCut > 0.0) discard;
+  if (uCut > 0.5 && vCut > 1e-7) discard;
+  if (uFlat < 0.5 && vS < uSec) discard; // section slice: everything above it is hidden
   vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;
   vec3 v = normalize(uEye - vW);
   vec3 l1 = normalize(vec3(0.4,0.9,0.6)); vec3 l2 = v;
@@ -47,12 +48,14 @@ export class View3D {
     this.prog = p;
     this.loc = {};
     for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss']) this.loc[a] = gl.getAttribLocation(p, a);
-    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat']) this.loc[u] = gl.getUniformLocation(p, u);
+    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec']) this.loc[u] = gl.getUniformLocation(p, u);
     this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
+      cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(),
+      kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
       lpos: gl.createBuffer(), lcol: gl.createBuffer() };
     this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.tgt = [0, 0, 0];
-    this.cutaway = true; this.exag = 0; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
+    this.cutaway = true; this.exag = 0; this.secZ = null; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
     // Fusion 360-style navigation: middle-drag pans, Shift + middle-drag orbits, the wheel
     // zooms about the cursor, double-click middle fits. Left-drag orbit / right-drag pan stay
     // as fallbacks for trackpads.
@@ -202,12 +205,13 @@ export class View3D {
     if (this.hasGhost) {
       const n = Ni * cols, gp = new Float32Array(3 * n), gn = new Float32Array(3 * n), gc = new Float32Array(3 * n), gcut = new Float32Array(n);
       const wall = Math.max(0.15 * rmax, 0.2e-3);
+      this.wallT = wall;
       for (let i = 0; i < Ni; i++) for (let u = 0; u < cols; u++) {
         const v = i * cols + u, P = this.vertex(i, u, 0);
         gp[3 * v] = P.x - P.nx * wall * this.radial; gp[3 * v + 1] = P.y - P.ny * wall * this.radial; gp[3 * v + 2] = P.z;
         gn[3 * v] = -P.nx; gn[3 * v + 1] = -P.ny; gn[3 * v + 2] = 0;
         gc[3 * v] = 0.55; gc[3 * v + 1] = 0.6; gc[3 * v + 2] = 0.68;
-        gcut[v] = P.x * this.cutN[0] + P.y * this.cutN[1] > 1e-9 * this.radial ? 1 : 0;
+        gcut[v] = gp[3 * v] * this.cutN[0] + gp[3 * v + 1] * this.cutN[1]; // signed distance to the cut plane
       }
       this.upload('gpos', gp); this.upload('gnrm', gn); this.upload('gcol', gc); this.upload('gcut', gcut);
     }
@@ -233,42 +237,121 @@ export class View3D {
   upload(name, arr) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW); }
 
   // opts: {values, range, cmap, film (m), markers, bare (Uint8), rgb (Float32 3/cell, overrides cmap), gloss (0..1/cell)}
-  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null) {
+  // The wall is drawn in grey at its true position and the coating as a second surface
+  // standing off it by the film thickness × this.exag (1 = true scale). Flooded cells (`fill`:
+  // full bore, plugs, tip pool) fill the bore to the axis. Where a bore is cut open, caps on
+  // the cut plane show the coating thickness (coloured band) and the wall (grey band).
+  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null) {
     const geo = this.geo; if (!geo || !this.gl) return;
-    const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols, SUB = this.SUB;
+    const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols, SUB = this.SUB, R = this.radial;
+    const inner = geo.surface === 'inner' && !geo.flat;
     const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n), gls = new Float32Array(n);
+    const cpos = new Float32Array(3 * n), ccol = new Float32Array(3 * n), ccut = new Float32Array(n), cgl = new Float32Array(n);
     const [lo, hi] = range;
-    const ex = this.exag;
-    // per-cell colour / gloss / displacement, then blended to the render vertices
-    const N = geo.N, cc = new Float32Array(3 * N), cg = new Float32Array(N), cd = new Float32Array(N);
+    const ex = this.exag || 0;
+    const N = geo.N, cc = new Float32Array(3 * N), cg = new Float32Array(N), cd = new Float32Array(N), cf = new Float32Array(N);
     for (let k = 0; k < N; k++) {
       if (bare && bare[k]) { cc[3 * k] = 0.50; cc[3 * k + 1] = 0.52; cc[3 * k + 2] = 0.56; }
       else if (rgbOverride) { cc[3 * k] = rgbOverride[3 * k]; cc[3 * k + 1] = rgbOverride[3 * k + 1]; cc[3 * k + 2] = rgbOverride[3 * k + 2]; }
       else { const rgb = colorAt(cmap, 0.2 + 0.8 * Math.max(0, Math.min(1, (values[k] - lo) / (hi - lo)))); cc[3 * k] = rgb[0] / 255; cc[3 * k + 1] = rgb[1] / 255; cc[3 * k + 2] = rgb[2] / 255; }
       cg[k] = glossField && !(bare && bare[k]) ? glossField[k] : 0;
-      cd[k] = film && ex > 0 ? film[k] * ex : 0;
+      cd[k] = film && !(bare && bare[k]) ? film[k] * ex : 0;
+      cf[k] = fill && fill[k] ? 1 : 0;
     }
+    // coating surface point for a wall point (body units × R) and a blended thickness
+    const coatPt = (x, y, nx, ny, d, fl) => {
+      if (inner) {
+        const r = Math.hypot(x, y) || 1e-12;
+        const t = fl > 0.5 ? 0.999 : Math.min(0.97, (d * R) / r); // never past the axis
+        return [x * (1 - t), y * (1 - t)];
+      }
+      return [x + nx * d * R, y + ny * d * R];
+    };
+    const blendAt = (i, jf) => {
+      const j = Math.floor(jf) % Nj, f = jf - Math.floor(jf), j2 = (j + 1) % Nj;
+      const k1 = Math.min(i, this.lastRow[j]) * Nj + j, k2 = Math.min(i, this.lastRow[j2]) * Nj + j2;
+      return { k1, k2, f };
+    };
+    const WALL = [0.60, 0.62, 0.66];
     for (let i = 0; i < Ni; i++) for (let u = 0; u < cols; u++) {
       const v = i * cols + u;
-      let j = geo.flat ? u : Math.floor(u / SUB) % Nj;
-      const f = geo.flat ? 0 : (u % SUB) / SUB, j2 = geo.flat ? j : (j + 1) % Nj;
-      // rows past the bevel take the values of the last existing cell of their column
-      const ia = Math.min(i, this.lastRow[j]), ib = Math.min(i, this.lastRow[j2]);
-      const k1 = ia * Nj + j, k2 = ib * Nj + j2;
-      const d = cd[k1] * (1 - f) + cd[k2] * f;
-      const P = this.vertex(i, u, d);
+      const { k1, k2, f } = geo.flat ? { k1: i * Nj + u, k2: i * Nj + u, f: 0 } : blendAt(i, u / SUB);
+      const d = cd[k1] * (1 - f) + cd[k2] * f, fl = cf[k1] * (1 - f) + cf[k2] * f;
+      const P = this.vertex(i, u, 0);
       pos[3 * v] = P.x; pos[3 * v + 1] = P.y; pos[3 * v + 2] = P.z;
       nrm[3 * v] = P.nx; nrm[3 * v + 1] = P.ny; nrm[3 * v + 2] = 0;
-      for (let c = 0; c < 3; c++) col[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
-      gls[v] = cg[k1] * (1 - f) + cg[k2] * f;
-      cut[v] = geo.surface === 'inner' && P.x * this.cutN[0] + P.y * this.cutN[1] > 1e-9 * this.radial ? 1 : 0;
+      for (let c = 0; c < 3; c++) col[3 * v + c] = WALL[c];
+      cut[v] = inner ? P.x * this.cutN[0] + P.y * this.cutN[1] : -1;
+      const C = geo.flat ? [P.x + P.nx * d, P.y + P.ny * d] : coatPt(P.x, P.y, P.nx, P.ny, d, fl);
+      cpos[3 * v] = C[0]; cpos[3 * v + 1] = C[1]; cpos[3 * v + 2] = P.z;
+      for (let c = 0; c < 3; c++) ccol[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
+      cgl[v] = cg[k1] * (1 - f) + cg[k2] * f;
+      ccut[v] = inner ? C[0] * this.cutN[0] + C[1] * this.cutN[1] : -1;
     }
+    // caps on the cut plane: two generator lines where the plane meets the bore
+    const kp = [], kn = [], kc = [], kg = [];
+    if (inner && this.cutaway) {
+      const [n0, n1] = this.cutN, p0 = -n1, p1 = n0, wall = this.wallT || 0;
+      for (const sgn of [1, -1]) {
+        let prev = null;
+        for (let i = 0; i < Ni; i++) {
+          const a = geo.A[i], b = geo.B[i];
+          const ph = Math.atan2((sgn * p1) / b, (sgn * p0) / a);
+          const x = a * Math.cos(ph) * R, y = b * Math.sin(ph) * R;
+          let nx = b * Math.cos(ph), ny = a * Math.sin(ph); const nl = Math.hypot(nx, ny) || 1; nx = -nx / nl; ny = -ny / nl; // into the bore
+          const jf = ((((ph - geo.phi[0]) / (2 * Math.PI)) * Nj) % Nj + Nj) % Nj;
+          const { k1, k2, f } = blendAt(i, jf);
+          const d = cd[k1] * (1 - f) + cd[k2] * f, fl = cf[k1] * (1 - f) + cf[k2] * f;
+          const u = jf * SUB, u0 = Math.floor(u) % cols, u1 = Math.min(cols - 1, u0 + 1), fu = u - Math.floor(u);
+          let z = i === 0 ? 0 : i === Ni - 1 ? geo.L : geo.s[i];
+          z = Math.min(z, this.cutS[u0] * (1 - fu) + this.cutS[u1] * fu);
+          const C = coatPt(x, y, nx, ny, d, fl);
+          const rgb = [0, 1, 2].map((c) => cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f);
+          const gl = cg[k1] * (1 - f) + cg[k2] * f;
+          const row = { W: [x, y, z], C: [C[0], C[1], z], G: [x - nx * wall * R, y - ny * wall * R, z], rgb, gl, thick: d > 0 || fl > 0.5 };
+          if (prev) {
+            const quad = (A, B, Cq, D, rgbA, rgbB, gA, gB) => { // A,B on row i-1; Cq,D on row i
+              for (const [Pq, rq, gq] of [[A, rgbA, gA], [B, rgbA, gA], [Cq, rgbB, gB], [B, rgbA, gA], [D, rgbB, gB], [Cq, rgbB, gB]]) { kp.push(...Pq); kn.push(n0, n1, 0); kc.push(...rq); kg.push(gq); }
+            };
+            if (prev.thick || row.thick) quad(prev.W, prev.C, row.W, row.C, prev.rgb, row.rgb, prev.gl, row.gl);
+            quad(prev.G, prev.W, row.G, row.W, [0.42, 0.45, 0.5], [0.42, 0.45, 0.5], 0, 0);
+          }
+          prev = row;
+        }
+      }
+    }
+    // section slice: ring caps at secZ (coating band coloured, wall band grey)
+    if (this.secZ != null && !geo.flat) {
+      const z = this.secZ; let i = 0; while (i < Ni - 2 && geo.s[i + 1] < z) i++;
+      const t = Math.max(0, Math.min(1, (z - geo.s[i]) / Math.max(geo.s[i + 1] - geo.s[i], 1e-12)));
+      const wall = this.wallT || 0;
+      const at = (u) => { // interpolated wall / coating / outer points and colour at render column u
+        const a = i * cols + u, b2 = (i + 1) * cols + u, L3 = (arr, v, c) => arr[3 * v + c];
+        const W = [0, 1].map((c) => L3(pos, a, c) * (1 - t) + L3(pos, b2, c) * t);
+        const C = [0, 1].map((c) => L3(cpos, a, c) * (1 - t) + L3(cpos, b2, c) * t);
+        const nx = L3(nrm, a, 0), ny = L3(nrm, a, 1);
+        const out = inner ? [W[0] - nx * wall * R, W[1] - ny * wall * R] : W;
+        const rgb = [0, 1, 2].map((c) => L3(ccol, a, c) * (1 - t) + L3(ccol, b2, c) * t);
+        const zc = Math.min(z, this.cutS[u]);
+        return { W: [W[0], W[1], zc], C: [C[0], C[1], zc], O: [out[0], out[1], zc], rgb, gl: cgl[a] * (1 - t) + cgl[b2] * t, cut: inner && this.cutaway && W[0] * this.cutN[0] + W[1] * this.cutN[1] > 1e-9, gone: z > this.cutS[u] };
+      };
+      const tri = (A, B, Cq, rgb, g) => { for (const Pq of [A, B, Cq]) { kp.push(...Pq); kn.push(0, 0, -1); kc.push(...rgb); kg.push(g); } };
+      for (let u = 0; u < cols - 1; u++) {
+        const p = at(u), q = at(u + 1);
+        if ((p.cut && q.cut) || p.gone || q.gone) continue;
+        tri(p.W, p.C, q.W, p.rgb, p.gl); tri(p.C, q.C, q.W, q.rgb, q.gl); // coating ring
+        if (inner) { const G = [0.42, 0.45, 0.5]; tri(p.O, p.W, q.O, G, 0); tri(p.W, q.W, q.O, G, 0); } // wall ring
+      }
+    }
+    this.nCap = kp.length / 3;
     {
       const Mm = this.modelMatrix(), pw = new Float32Array(pos.length);
-      for (let v = 0; v < pos.length; v += 3) for (let c = 0; c < 3; c++) pw[v + c] = Mm[c] * pos[v] + Mm[4 + c] * pos[v + 1] + Mm[8 + c] * pos[v + 2] + Mm[12 + c];
-      this._posW = pw; this._cutV = cut;
+      for (let v = 0; v < pos.length; v += 3) for (let c = 0; c < 3; c++) pw[v + c] = Mm[c] * cpos[v] + Mm[4 + c] * cpos[v + 1] + Mm[8 + c] * cpos[v + 2] + Mm[12 + c];
+      this._posW = pw; this._cutV = ccut.map((x) => (x > 0 ? 1 : 0));
     }
-    this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut); this.upload('gloss', gls);
+    this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut); this.upload('gloss', new Float32Array(n));
+    this.upload('cpos', cpos); this.upload('cnrm', nrm); this.upload('ccol', ccol); this.upload('ccut', ccut); this.upload('cgloss', cgl);
+    if (this.nCap) { this.upload('kpos', new Float32Array(kp)); this.upload('knrm', new Float32Array(kn)); this.upload('kcol', new Float32Array(kc)); this.upload('kgloss', new Float32Array(kg)); }
     this.markers = markers;
     this.render();
   }
@@ -400,12 +483,24 @@ export class View3D {
     gl.uniformMatrix4fv(this.loc.uModel, false, Mm);
     gl.uniform3fv(this.loc.uEye, e2);
     gl.uniform1f(this.loc.uCut, this.cutaway ? 1 : 0);
+    gl.uniform1f(this.loc.uSec, this.secZ != null ? this.secZ - 1e-7 : -1e9);
     const bindA = (name, loc, size) => { if (loc < 0) return; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
     // main surface
     bindA('pos', this.loc.aPos, 3); bindA('nrm', this.loc.aNrm, 3); bindA('col', this.loc.aCol, 3); bindA('cut', this.loc.aCut, 1); bindA('gloss', this.loc.aGloss, 1);
     gl.uniform1f(this.loc.uAlpha, 1); gl.uniform1f(this.loc.uFlat, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
+    // coating layer (pulled toward the eye so a true-scale film still shows over the wall)
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -4);
+    bindA('cpos', this.loc.aPos, 3); bindA('cnrm', this.loc.aNrm, 3); bindA('ccol', this.loc.aCol, 3); bindA('ccut', this.loc.aCut, 1); bindA('cgloss', this.loc.aGloss, 1);
+    gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    // caps on the cut plane: coating thickness band + wall band
+    if (this.nCap) {
+      bindA('kpos', this.loc.aPos, 3); bindA('knrm', this.loc.aNrm, 3); bindA('kcol', this.loc.aCol, 3); bindA('kgloss', this.loc.aGloss, 1);
+      gl.disableVertexAttribArray(this.loc.aCut); gl.vertexAttrib1f(this.loc.aCut, -1);
+      gl.drawArrays(gl.TRIANGLES, 0, this.nCap);
+    }
     // lines (no depth test so markers are always visible)
     const lines = this.buildLines(performance.now());
     this.upload('lpos', lines.lp); this.upload('lcol', lines.lc);

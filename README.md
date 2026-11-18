@@ -30,6 +30,8 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 - **A/B comparison:** pin a run as reference A, change settings and re-run to see the metric deltas, a plain-language list of changed settings, and a difference map of the final dry film (also for different grids or part lengths).
 - **Save and load** setups, shareable links, and CSV/JSON/PNG export.
 
+**Seeing the coating thickness:** in the 3D view the coating is its own layer on the grey wall. Where the bore is cut open, the cut faces show the coating and wall as bands. A full bore, plugs and the tip pool show as liquid filling the cross-section. **Thickness** magnifies the coating (far left = true scale; by default the thickest wet films are drawn at about a third of the bore radius, and the factor is shown), and **Section** slices the part across at any height so the coating shows as a ring.
+
 **3D view controls (Fusion 360 style):** middle-drag to pan, Shift + middle-drag to orbit, scroll to zoom toward the cursor, and double-click the middle button (or F6) to fit. Home or H returns to the home view. Left-drag orbit and right-drag pan also work on trackpads, and a controls panel sits in the corner of the view.
 
 ## Geometries and materials

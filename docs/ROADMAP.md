@@ -82,6 +82,12 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 - [x] IOL cartridge tilt locked to vertical, proximal end up, in every stage (the tilt field is hidden); old saved setups with a horizontal stage no longer flip the cartridge during playback
 - Finding: with the long side across the wider 1.7 mm tip dimension (clock 0°), the fill stage leaves a ~115 µm bead on the short-side lip that 5 SCFH jets don't strip (capillary hold ≈ 130 µm). With the long side on the cartridge floor (270°) it doesn't happen
 
+## Done (v0.10.0) — coating drawn as a 3D layer (owner request)
+- [x] The wall is drawn in grey at its true position and the coating as a separate surface standing off it by film × magnification; flooded cells (fill, plugs, bath, tip pool) fill the bore to the axis
+- [x] Caps on the cut-open plane show the coating band and the wall band (exact plane, not per-vertex)
+- [x] Thickness slider: log scale from true scale up to max(20× auto, ×2000); auto draws the run's 95th-percentile film/radius at a third of the bore radius; the factor is shown next to the slider and in the overlay
+- [x] Section slider: slices the part across at any height and draws the coating and wall as rings
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

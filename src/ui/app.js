@@ -476,6 +476,18 @@ function fieldValues(fr, key) {
 
 // Animation colours: glossy liquid (light → deep blue with thickness) → matte dry film (sand) → cured (amber)
 const C_THIN = [0.62, 0.86, 1.0], C_THICK = [0.10, 0.36, 0.86], C_DRY = [0.90, 0.80, 0.58], C_CURED = [0.82, 0.50, 0.20];
+// Cells where liquid fills the whole bore (fill stage, plugs, bath, tip pool): drawn solid.
+function floodedCells(fr) {
+  const res = state.result, geo = res.geometry, n = fr.h.length, out = new Uint8Array(n), pool = fr.aux && fr.aux.pool;
+  for (let k = 0; k < n; k++) {
+    if (fr.mask && fr.mask[k] === 1) { out[k] = 1; continue; }
+    if (!pool || !geo.edgeEnd) continue;
+    const i = Math.floor(k / geo.Nj);
+    if ((pool[1] > 1e-12 && geo.edgeEnd[k] >= 0 && geo.edgeEnd[k] <= geo.poolReach[1]) || (pool[0] > 1e-12 && geo.s[i] <= geo.poolReach[0])) out[k] = 1;
+  }
+  return geo.surface === 'inner' ? out : null;
+}
+
 function stateColors(fr) {
   const res = state.result, c = res._coat, n = fr.h.length, hp = res._hp;
   const rgb = new Float32Array(3 * n), gloss = new Float32Array(n);
@@ -602,23 +614,39 @@ function updateViews() {
   }
   const film = new Float32Array(fr.h.length);
   let hmax = 0; for (let k = 0; k < film.length; k++) { film[k] = Math.max(0, fr.h[k] - hp); if (!(fr.mask && fr.mask[k] === 1)) hmax = Math.max(hmax, film[k]); }
-  const ex = Number($('#exag').value);
-  const rref = Math.max(...res.geometry.A) || res.geometry.L * 0.05;
-  view3d.exag = ex > 0 ? (ex / 100) * (0.35 * rref) / Math.max(hmax, 4 * res._wetRef) : 0;
+  // Coating thickness magnifier: slider 0 = true scale, 100 = 20× the auto scale (at least
+  // ×2000, enough to see a 1 µm dry film). Auto: a thick wet film for this run (95th percentile
+  // of film / local bore radius) is drawn at about a third of the bore radius, so the film is
+  // visible without flooding the bore, and drying and draining show at a fixed scale.
+  if (res._ratio95 === undefined) {
+    const g = res.geometry, rr = []; const step = Math.max(1, Math.floor(res.frames.length / 40));
+    for (let q = 0; q < res.frames.length; q += step) { const f = res.frames[q]; for (let k = 0; k < f.h.length; k += 2) { if ((f.mask && f.mask[k] === 1) || f.h[k] <= 5 * hp) continue; const i = Math.floor(k / g.Nj); rr.push((f.h[k] - hp) / Math.min(g.A[i], g.B[i] || g.A[i])); } }
+    rr.sort((x, y) => x - y); res._ratio95 = rr.length ? rr[Math.floor(0.95 * (rr.length - 1))] : 0.01;
+  }
+  const eAuto = Math.max(1, 0.33 / Math.max(res._ratio95, 1e-6)), eMax = Math.max(20 * eAuto, 2000);
+  if (!state.exagTouched) $('#exag').value = Math.round((100 * Math.log(eAuto)) / Math.log(eMax));
+  view3d.exag = Math.pow(eMax, Number($('#exag').value) / 100);
+  $('#exagVal').textContent = view3d.exag < 1.5 ? 'true scale' : `×${fmt(view3d.exag, 2)}`;
   view3d.cutaway = $('#cutaway').checked;
+  const sec = Number($('#section').value), Lmm = res.geometry.L * 1e3;
+  view3d.secZ = sec > 0 ? (sec / 100) * res.geometry.L * 0.995 : null;
+  $('#sectionVal').textContent = sec > 0 ? `${fmt((sec / 100) * Lmm * 0.995, 3)} mm` : 'off';
   view3d.tilt = st ? st.tilt ?? defaultTilt(st.type, res.spec.geometry) : (res.spec.stages[0]?.tilt ?? defaultTilt(res.spec.stages[0]?.type, res.spec.geometry));
   let bare = null;
   if (!['theta', 'temp', 'diff'].includes(state.field)) { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) && !(fr.aux?.pool && fr.aux.pool[1] > 1e-12 && res.geometry.edgeEnd && res.geometry.edgeEnd[k] >= 0 && res.geometry.edgeEnd[k] <= res.geometry.poolReach[1]) ? 1 : 0; }
   const act = activityOf(fr, st);
-  if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, film, marks, bare, sc.rgb, sc.gloss); }
-  else if (state.field === 'diff') view3d.setField(vals, range, 'diverge', film, marks, null, diffColors(vals, range[1]));
-  else view3d.setField(vals, range, state.cmap, film, marks, bare);
+  const fill = floodedCells(fr);
+  if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, film, marks, bare, sc.rgb, sc.gloss, fill); }
+  else if (state.field === 'diff') view3d.setField(vals, range, 'diverge', film, marks, null, diffColors(vals, range[1]), null, fill);
+  else view3d.setField(vals, range, state.cmap, film, marks, bare, null, null, fill);
   view3d.setEffects(state.tab === 'v3d' ? act.fx : []);
   $('#v3d').className = 'view' + (state.tab === 'v3d' ? ' active' : '') + (act.bg ? ' ' + act.bg : '');
   let Tm = 0; for (const v of fr.T) Tm += v; Tm = Tm / fr.T.length - 273.15;
   $('#ovl3d').innerHTML = `<div class="ov-stage" style="border-color:${st ? res._stageColor(fr.stage) : '#888'}">${esc(fr.label.replace(/ \(end\)$/, ''))}</div>`
     + `<div>${esc(act.text)}</div>${fr.aux?.pool && fr.aux.pool[1] > 1e-11 ? `<div>Pool held at the tip: ${(fr.aux.pool[1] * 1e9).toFixed(1)} µL</div>` : ''}<div class="muted">t = ${fmtTime(fr.t)} · part ${Tm.toFixed(0)} °C</div>`
-    + (view3d.radial > 1.01 ? `<div class="muted">Radius drawn ×${fmt(view3d.radial)} for visibility</div>` : '');
+    + (view3d.radial > 1.01 ? `<div class="muted">Radius drawn ×${fmt(view3d.radial)} for visibility</div>` : '')
+    + (view3d.secZ != null ? `<div class="muted">Section at ${fmt(view3d.secZ * 1e3, 3)} mm from the proximal end</div>` : '')
+    + (state.field !== 'diff' && view3d.exag >= 1.5 ? `<div class="muted">Coating drawn ×${fmt(view3d.exag, 2)} thicker than true scale</div>` : '');
   if (state.field === 'state') {
     // same liquid / dry / cured colours as the 3D view, so the legend holds for both
     const sc = stateColors(fr), rgb = sc.rgb;
@@ -1061,7 +1089,8 @@ function init() {
   for (const c of COLORMAPS) $('#cmap').append(el('option', { value: c }, { blue: 'Blue', viridis: 'Viridis', cure: 'Copper' }[c] || c));
   $('#field').addEventListener('change', (e) => { state.field = e.target.value; updateViews(); });
   $('#cmap').addEventListener('change', (e) => { state.cmap = e.target.value; updateViews(); });
-  $('#exag').addEventListener('input', updateViews);
+  $('#exag').addEventListener('input', () => { state.exagTouched = true; updateViews(); });
+  $('#section').addEventListener('input', () => { if (state.result) updateViews(); });
   $('#cutaway').addEventListener('change', () => { view3d.cutaway = $('#cutaway').checked; view3d.render(); });
   $('#radial').addEventListener('change', () => { view3d.radialMode = $('#radial').value; if (state.result) { view3d.setGeometry(state.result.geometry); updateViews(); } else previewGeometry(true); });
   $('#resetView').addEventListener('click', () => view3d.resetView());
