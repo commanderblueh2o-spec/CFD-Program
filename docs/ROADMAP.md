@@ -75,6 +75,13 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 ## Done (v0.8.2) — cartridge orientation (owner request)
 - [x] IOL cartridges default to vertical, wide proximal end up and tip down, in every stage: on presets, when the part is switched to a cartridge, for newly added stages, and in the solver's stage defaults
 
+## Done (v0.9.0) — no rotation, visible 35° bevel, cartridge locked upright (owner feedback)
+- [x] Removed every rotation option (stage rpm fields, rotating presets, rotation advice); old saved setups with rpm are ignored. Spray uses 1–8 fixed nozzles spaced around the part instead
+- [x] Bevel angle measured between the face and the axis (the usual convention): 35° now gives a ~1.9 mm cut on the 1.35 mm-deep tip instead of ~0.9 mm
+- [x] Bevelled bores are cut open along the bevel plane and viewed from that side, so the whole slant is shown in profile. Default drip/stream placement moves to the middle of the visible half
+- [x] IOL cartridge tilt locked to vertical, proximal end up, in every stage (the tilt field is hidden); old saved setups with a horizontal stage no longer flip the cartridge during playback
+- Finding: with the long side across the wider 1.7 mm tip dimension (clock 0°), the fill stage leaves a ~115 µm bead on the short-side lip that 5 SCFH jets don't strip (capillary hold ≈ 130 µm). With the long side on the cartridge floor (270°) it doesn't happen
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

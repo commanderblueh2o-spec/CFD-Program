@@ -115,7 +115,7 @@ export function computeMetrics(ctx, stages) {
     const top = am.slice(0, third).reduce((a, b) => a + b, 0) / third;
     const bot = am.slice(-third).reduce((a, b) => a + b, 0) / third;
     const ratio = Math.max(top, bot) / Math.max(Math.min(top, bot), 1e-9);
-    if (ratio > 1.3 && dryUm.mean > 0) add(ratio > 2 ? 'high' : 'medium', 'Axial thickness gradient', `One end is ${ratio.toFixed(2)}× thicker than the other (${top.toFixed(2)} vs ${bot.toFixed(2)} µm).`, 'Typical of gravity drainage or speed-dependent deposition: use a speed ramp, invert the part between stages, shorten time-to-set (faster solvent, heat) or rotate horizontally.');
+    if (ratio > 1.3 && dryUm.mean > 0) add(ratio > 2 ? 'high' : 'medium', 'Axial thickness gradient', `One end is ${ratio.toFixed(2)}× thicker than the other (${top.toFixed(2)} vs ${bot.toFixed(2)} µm).`, 'Typical of gravity drainage or speed-dependent deposition: use a speed ramp, invert the part between stages, shorten time-to-set (faster solvent, heat).');
     // beading: count pronounced local maxima
     let peaks = 0;
     for (let i = 1; i < am.length - 1; i++) if (am[i] > am[i - 1] && am[i] > am[i + 1] && am[i] > 1.5 * dryUm.mean) peaks++;
@@ -124,9 +124,9 @@ export function computeMetrics(ctx, stages) {
   // circumferential sag
   if (!geo.flat && Nj >= 8) {
     const cm = circProfile.mean, mx = Math.max(...cm), mn = Math.min(...cm);
-    const horiz = stages.some((st) => ['dip', 'spray', 'drip', 'vacuum', 'dwell', 'airflow'].includes(st.type) && (st.tilt ?? 90) > 45 && (st.tilt ?? 90) < 135 && !(st.rpm > 0));
+    const horiz = stages.some((st) => ['dip', 'spray', 'drip', 'vacuum', 'dwell', 'airflow'].includes(st.type) && (st.tilt ?? 90) > 45 && (st.tilt ?? 90) < 135);
     const fixC = horiz
-      ? 'Gravity drains the film toward the low side of a horizontal part: rotate it until the film sets, or hold it vertically.'
+      ? 'Gravity drains the film toward the low side of a horizontal part: hold it vertically, or let the film set faster (heat, faster solvent).'
       : 'Liquid stays near where it was applied (vertical, stationary part): add more bead lines / needles around the bore, lower the contact angle (plasma) or the viscosity so it spreads before it sets.';
     if (mn >= 0 && mx > 1.4 * Math.max(mn, 1e-9) && dryUm.mean > 0) add(mx > 2.5 * mn ? 'high' : 'medium', horiz ? 'Circumferential sag' : 'Uneven around the circumference', `Around the circumference the film varies ${mn.toFixed(2)}–${mx.toFixed(2)} µm.`, fixC);
   }

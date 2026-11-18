@@ -118,7 +118,7 @@ test('spray deposits no more than the transfer-efficient flow', () => {
   const spec = {
     geometry: { type: 'catheter', length: 40, od: 3, id: 2 }, surface: 'outer', substrate: 'tpu', coating: 'silicone_oil_350', coatingOverrides: oil,
     grid: { ns: 80, nphi: 24 },
-    stages: [{ type: 'spray', flowMlMin: 1, transferEff: 0.5, standoffMm: 30, coneDeg: 20, traverseMmS: 20, passes: 2, startMm: 0, endMm: 40, rpm: 60, tilt: 90, inFlightEvapPct: 0, drainAfter: 0 }],
+    stages: [{ type: 'spray', flowMlMin: 1, transferEff: 0.5, standoffMm: 30, coneDeg: 20, traverseMmS: 20, passes: 2, startMm: 0, endMm: 40, nozzles: 3, tilt: 90, inFlightEvapPct: 0, drainAfter: 0 }],
   };
   const r = simulate(spec);
   const sprayed = (1e3 / 60) * 0.5 * 4; // µL: flow × TE × time (2 passes × 2 s)

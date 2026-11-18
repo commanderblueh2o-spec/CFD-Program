@@ -150,7 +150,8 @@ export class View3D {
     if (!force && this._camTilt === this.tilt) return;
     this._camTilt = this.tilt;
     const vertical = this.tilt < 45 || this.tilt > 135;
-    if (vertical) { this.yaw = 1.05; this.pitch = 0.3; this.dist = 3.4; } else { this.yaw = -0.5; this.pitch = 0.55; this.dist = 2.7; }
+    const n = this.cutN || [0, 1];
+    if (vertical) { this.yaw = Math.atan2(n[1], n[0]) - 0.52; this.pitch = 0.3; this.dist = 3.4; } else { this.yaw = -0.5; this.pitch = 0.55; this.dist = 2.7; }
     this.tgt = [0, 0, 0];
   }
 
@@ -172,6 +173,11 @@ export class View3D {
       idx.push(a, c, b, b, c, d);
     }
     this.nIdx = idx.length;
+    // Cut-open plane: normally the body +y half is removed. A bevelled bore is instead sliced
+    // along the bevel's own plane (the half perpendicular to the bevel direction is removed),
+    // so the whole slanted cut, long side to short side, shows in profile.
+    const bvl = geo.bevel && geo.bevel.deg > 0 && geo.surface === 'inner';
+    if (bvl) { const cb = (geo.bevel.clockDeg * Math.PI) / 180; this.cutN = [-Math.sin(cb), Math.cos(cb)]; } else this.cutN = [0, 1];
     // per render column: the bevel cut position and the last existing simulation row
     const vm = geo.voidMask, ee = geo.edgeEnd;
     this.cutS = new Float32Array(cols); this.lastRow = new Int32Array(Nj);
@@ -201,7 +207,7 @@ export class View3D {
         gp[3 * v] = P.x - P.nx * wall * this.radial; gp[3 * v + 1] = P.y - P.ny * wall * this.radial; gp[3 * v + 2] = P.z;
         gn[3 * v] = -P.nx; gn[3 * v + 1] = -P.ny; gn[3 * v + 2] = 0;
         gc[3 * v] = 0.55; gc[3 * v + 1] = 0.6; gc[3 * v + 2] = 0.68;
-        gcut[v] = P.y > 1e-9 * this.radial ? 1 : 0;
+        gcut[v] = P.x * this.cutN[0] + P.y * this.cutN[1] > 1e-9 * this.radial ? 1 : 0;
       }
       this.upload('gpos', gp); this.upload('gnrm', gn); this.upload('gcol', gc); this.upload('gcut', gcut);
     }
@@ -255,7 +261,7 @@ export class View3D {
       nrm[3 * v] = P.nx; nrm[3 * v + 1] = P.ny; nrm[3 * v + 2] = 0;
       for (let c = 0; c < 3; c++) col[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
       gls[v] = cg[k1] * (1 - f) + cg[k2] * f;
-      cut[v] = geo.surface === 'inner' && P.y > 1e-9 * this.radial ? 1 : 0;
+      cut[v] = geo.surface === 'inner' && P.x * this.cutN[0] + P.y * this.cutN[1] > 1e-9 * this.radial ? 1 : 0;
     }
     {
       const Mm = this.modelMatrix(), pw = new Float32Array(pos.length);
@@ -333,10 +339,13 @@ export class View3D {
         }
       } else if (e.kind === 'needle') {
         const from = e.fromEnd === 'end' ? L * 1.15 : -0.15 * L;
-        const [, b] = this.ringAt(e.s, 1);
-        const y = geo.surface === 'inner' ? -0.45 * b : 1.6 * b;
-        seg([0, y, from], [0, y, e.s], [0.85, 0.87, 0.9]);
-        seg([0, y, e.s], [0, y - 0.15 * Math.max(b, 0.0005), e.s], [0.3, 0.8, 1.0]);
+        const [a, b] = this.ringAt(e.s, 1);
+        const n = this.cutN || [0, 1];
+        // inside: in the visible half, toward its wall; outside: above the part
+        const x = geo.surface === 'inner' ? -0.45 * a * n[0] : 0, y = geo.surface === 'inner' ? -0.45 * b * n[1] : 1.6 * b;
+        const tx = geo.surface === 'inner' ? -0.15 * Math.max(a, 0.0005) * n[0] : 0, ty = geo.surface === 'inner' ? -0.15 * Math.max(b, 0.0005) * n[1] : -0.15 * Math.max(b, 0.0005);
+        seg([x, y, from], [x, y, e.s], [0.85, 0.87, 0.9]);
+        seg([x, y, e.s], [x + tx, y + ty, e.s], [0.3, 0.8, 1.0]);
       } else if (e.kind === 'spray') {
         const [a] = this.ringAt(e.s, 1), top = 3 * Math.max(a, 0.001) + 0.05 * L;
         const n = 28, rgb = [0.55, 0.8, 1.0];

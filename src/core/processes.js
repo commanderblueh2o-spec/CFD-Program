@@ -15,21 +15,27 @@ export const STAGE_TYPES = ['plasma', 'dip', 'spray', 'drip', 'fill', 'vacuum', 
 
 // Default parameters for each stage type (lengths mm, speeds mm/s unless noted).
 export const STAGE_DEFAULTS = {
-  plasma: { duration: 20, power: 1.0, holdMinutes: 5, penetrationMm: 6, fromEnd: 'both', tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  dip: { speed: 2, mode: 'constant', speedEnd: 1, speed2: 1.5, switch1Pct: 50, switch2Pct: 80, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
-  spray: { flowMlMin: 2, transferEff: 0.7, standoffMm: 40, coneDeg: 30, traverseMmS: 20, passes: 4, startMm: 0, endMm: 1e9, clockDeg: 90, inFlightEvapPct: 20, lanceSigmaMm: 2, tempC: 25, tilt: 90, rpm: 60, ambientAir: 0, drainAfter: 10 },
-  drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0, drainAfter: 20 },
-  fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, rpm: 0, ambientAir: 0 },
-  vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  airflow: { duration: 20, nozzleSpeed: 0, airFlowScfh: 20, nozzleDiaMm: 2, captureFrac: 0.2, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetScfh: 0, crossJetDiaMm: 1.5, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  dwell: { duration: 60, tempC: 25, tilt: 90, rpm: 0, ambientAir: 0 },
-  cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 0, rpm: 0, ambientAir: 0.3 },
+  plasma: { duration: 20, power: 1.0, holdMinutes: 5, penetrationMm: 6, fromEnd: 'both', tempC: 25, tilt: 90, ambientAir: 0 },
+  dip: { speed: 2, mode: 'constant', speedEnd: 1, speed2: 1.5, switch1Pct: 50, switch2Pct: 80, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, ambientAir: 0 },
+  spray: { nozzles: 1, flowMlMin: 2, transferEff: 0.7, standoffMm: 40, coneDeg: 30, traverseMmS: 20, passes: 4, startMm: 0, endMm: 1e9, clockDeg: 90, inFlightEvapPct: 20, lanceSigmaMm: 2, tempC: 25, tilt: 90, ambientAir: 0, drainAfter: 10 },
+  drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, ambientAir: 0, drainAfter: 20 },
+  fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, ambientAir: 0 },
+  vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, ambientAir: 0 },
+  airflow: { duration: 20, nozzleSpeed: 0, airFlowScfh: 20, nozzleDiaMm: 2, captureFrac: 0.2, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetScfh: 0, crossJetDiaMm: 1.5, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, ambientAir: 0 },
+  dwell: { duration: 60, tempC: 25, tilt: 90, ambientAir: 0 },
+  cure: { duration: 300, mode: 'thermal', tempC: 100, uvIntensity: 100, uvTransmission: 0.6, tilt: 0, ambientAir: 0.3 },
 };
 
 // IOL cartridges stand vertical with the wide proximal end up and the tip down (tilt 0,
 // s = 0 at the top) unless a stage says otherwise; other parts use the per-stage default.
 export function defaultTilt(type, geometry) { return geometry && geometry.type === 'iol_cartridge' ? 0 : (STAGE_DEFAULTS[type] || {}).tilt ?? 90; }
-export function withDefaults(stage, geometry) { return { ...STAGE_DEFAULTS[stage.type], tilt: defaultTilt(stage.type, geometry), ...stage }; }
+// Parts never rotate (SAICCS cartridges and the other fixtures are stationary), so any
+// rpm left in an old saved setup is ignored, and a cartridge is always upright.
+export function withDefaults(stage, geometry) {
+  const st = { ...STAGE_DEFAULTS[stage.type], tilt: defaultTilt(stage.type, geometry), ...stage, rpm: 0 };
+  if (geometry && geometry.type === 'iol_cartridge') st.tilt = 0;
+  return st;
+}
 
 function airShear(U, D) {
   if (!(U > 0)) return 0;
@@ -116,32 +122,14 @@ function lumenEvapFactor(ctx, airInLumen) {
   }
 }
 
-// Set gravity, temperature etc. for this step. Handles part rotation.
+// Set gravity, temperature etc. for this step (parts are stationary).
 function applyEnv(ctx, st, t0) {
   const fs = ctx.fs;
   fs.env.T = (st.tempC ?? 25) + 273.15;
   if (!ctx._airTField) fs.Tair.fill(fs.env.T);
   if (!fs._airField) { const U = Math.max(fs.env.airU || 0, st.ambientAir || 0); fs.airUf.fill(U); fs.hcAir.fill(hConv(U)); }
-  const omega = ((st.rpm || 0) * 2 * Math.PI) / 60;
   fs.dtCap = 0;
-  if (omega > 0) {
-    // Resolve the rotation (rimming flow, drag-out of puddles) while the film is mobile;
-    // once the film moves negligibly per revolution, use the rotation-averaged gravity.
-    const { h, mu, hp, rho } = fs;
-    let vg = 0;
-    for (let k = 0; k < h.length; k++) if (h[k] > 4 * hp && !fs.mask[k]) { const v = (rho * G0 * h[k] * h[k]) / (mu[k] || ctx.coat.mu0); if (v > vg) vg = v; }
-    if (fs._minW === undefined) { let mw = fs.geo.ds; for (const x of fs.geo.w) if (x < mw) mw = x; fs._minW = mw; }
-    if (vg * ((2 * Math.PI) / omega) > 0.02 * fs._minW) {
-      fs.dtCap = 0.25 / omega;
-      if (fs.dt > fs.dtCap) fs.dt = fs.dtCap;
-      fs.setGravity(gravityBody(st.tilt || 0, omega * (fs.t - t0 + 0.5 * fs.dt)));
-    } else {
-      const b = ((st.tilt || 0) * Math.PI) / 180;
-      fs.setGravity([0, 0, G0 * Math.cos(b)]);
-    }
-  } else {
-    fs.setGravity(gravityBody(st.tilt || 0, 0));
-  }
+  fs.setGravity(gravityBody(st.tilt || 0, 0));
 }
 
 function clearFields(fs) { fs.src.fill(0); fs.tauS.fill(0); fs.tauP.fill(0); fs.env.uv = 0; fs.env.airU = 0; fs._airField = false; }
@@ -453,13 +441,12 @@ STAGES.spray = {
       return;
     }
     const sig = Math.max((st.standoffMm * 1e-3 * Math.tan((st.coneDeg * Math.PI) / 360)) / 2, geo.ds);
-    const omega = ((st.rpm || 0) * 2 * Math.PI) / 60;
-    const K = omega > 0 ? Math.min(24, Math.max(1, Math.ceil((omega * fs.dt) / 0.25))) : 1;
+    // stationary part: n fixed nozzles spaced evenly around it, flow split between them
+    const K = geo.flat ? 1 : Math.max(1, Math.round(st.nozzles || 1));
     const w = Q / (2 * Math.PI * sig * sig) / K;
     const { pos, nrm } = geo;
     for (let q = 0; q < K; q++) {
-      const psi = omega * (tl + ((q + 0.5) / K) * fs.dt);
-      const ang = (st.clockDeg * Math.PI) / 180 - psi;
+      const ang = (st.clockDeg * Math.PI) / 180 + (2 * Math.PI * q) / K;
       const dx = geo.flat ? 0 : Math.cos(ang), dy = geo.flat ? 1 : Math.sin(ang);
       for (let k = 0; k < geo.N; k++) {
         const inc = nrm[3 * k] * dx + nrm[3 * k + 1] * dy;
@@ -489,7 +476,12 @@ STAGES.drip = {
     if (st.clockDeg !== null && st.clockDeg !== undefined && st.clockDeg !== '') return (st.clockDeg * Math.PI) / 180;
     const g = ctx.fs.env.g;
     const down = Math.atan2(g[1], g[0]);
-    if (Math.hypot(g[0], g[1]) < 1e-6) return ctx.geo.surface === 'inner' ? 1.5 * Math.PI : Math.PI / 2; // vertical: the side shown when cut open
+    if (Math.hypot(g[0], g[1]) < 1e-6) { // vertical: the middle of the half shown when cut open
+      if (ctx.geo.surface !== 'inner') return Math.PI / 2;
+      const bv = ctx.geo.bevel;
+      if (bv && bv.deg > 0) { const cb = (bv.clockDeg * Math.PI) / 180; return Math.atan2(-Math.cos(cb), Math.sin(cb)); } // bevelled: sliced along the bevel plane
+      return 1.5 * Math.PI;
+    }
     return ctx.geo.surface === 'inner' ? down : down + Math.PI; // lowest point inside, top outside
   },
   deposit(ctx, st, s0, V, rbOverride) {

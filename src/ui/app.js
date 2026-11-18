@@ -254,6 +254,7 @@ function fieldVisible(st, d) {
   if (d.mode && vals.mode !== d.mode) return false;
   if (d.modes && !d.modes.includes(vals.mode)) return false;
   if (d.cure && vals.mode !== d.cure) return false;
+  if (d.key === 'tilt' && state.spec.geometry.type === 'iol_cartridge') return false; // always upright, tip down
   return true;
 }
 const isMain = (d) => !!d.sl || (d.kind === 'select' && d.key === 'mode');

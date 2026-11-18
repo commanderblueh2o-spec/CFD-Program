@@ -135,12 +135,15 @@ export function buildGeometry(spec) {
     crossArea[i] = flat ? 0 : Math.PI * a * b;
     rHyd[i] = flat ? 0 : 2 * crossArea[i] / P; // = D_h / 2
   }
-  // Bevelled tip (IOL cartridge nozzles): the tube end is cut by a plane at `tipBevelDeg`
-  // from square. Cells beyond the cut do not exist (void). edgeEnd = axial distance from a
+  // Bevelled tip (IOL cartridge nozzles): the tube end is cut by a plane whose face makes
+  // `tipBevelDeg` with the part axis (the usual way cartridge and needle bevels are quoted:
+  // 35° gives a cut about 1.4× the tip depth long; 0 or 90 = square end). Internally `bev`
+  // is the angle from square. Cells beyond the cut do not exist (void). edgeEnd = axial distance from a
   // cell to the open tip edge (along its own generator line).
   const voidMask = new Uint8Array(N);
   const edgeEnd = new Float64Array(N);
-  const bev = !flat ? ((spec.geometry.tipBevelDeg || 0) * Math.PI) / 180 : 0;
+  const bevAxis = spec.geometry.tipBevelDeg || 0;
+  const bev = !flat && bevAxis > 0 && bevAxis < 90 ? ((90 - bevAxis) * Math.PI) / 180 : 0;
   const cb = (((spec.geometry.bevelClockDeg ?? 270) * Math.PI) / 180);
   const aT = A[Ni - 1], bT = B[Ni - 1];
   const qmax = Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb));
@@ -163,7 +166,7 @@ export function buildGeometry(spec) {
   return {
     spec, surface: surf, flat, periodic: !flat, Ni, Nj, N, ds, dphi, L: Lm, s, phi, A, B,
     w, area, kc, nrm, es, ep, pos, crossArea, perim, rHyd, voidMask, edgeEnd, endCell, hasVoid: voidMask.some((v) => v),
-    bevel: { deg: (bev * 180) / Math.PI, clockDeg: (cb * 180) / Math.PI, qmax },
+    bevel: { deg: (bev * 180) / Math.PI, faceDeg: bevAxis, clockDeg: (cb * 180) / Math.PI, qmax },
   };
 }
 

@@ -30,8 +30,8 @@ export const GEOMETRY_SCHEMAS = {
       f('nozzleLength', 'Nozzle length', 'mm', 1, 30, 0.5, ''),
       f('tipWidth', 'Tip inner width', 'mm', 0.5, 6, 0.05, ''),
       f('tipHeight', 'Tip inner height', 'mm', 0.5, 6, 0.05, ''),
-      f('tipBevelDeg', 'Tip bevel angle', '°', 0, 70, 1, 'Angle of the bevel cut at the nozzle tip (typically 35°; 0 = square cut).'),
-      f('bevelClockDeg', 'Bevel orientation', '°', 0, 360, 1, 'Which side of the tip is the long side of the bevel.'),
+      f('tipBevelDeg', 'Tip bevel angle', '°', 0, 85, 1, 'Angle between the bevel face and the cartridge axis (typically 35°; smaller = longer, sharper bevel; 0 = square cut).'),
+      f('bevelClockDeg', 'Bevel orientation', '°', 0, 360, 1, 'Which side of the tip is the long side of the bevel (270 = the floor of the cartridge).'),
       f('wall', 'Wall thickness', 'mm', 0.1, 3, 0.05, 'Used for the outer surface.'),
     ],
     defaults: { chamberLength: 12, chamberWidth: 5.6, chamberHeight: 4, taperLength: 14, nozzleWidth: 2.1, nozzleHeight: 1.7, nozzleLength: 10, tipWidth: 1.7, tipHeight: 1.35, tipBevelDeg: 35, bevelClockDeg: 270, wall: 0.6 },
@@ -40,8 +40,8 @@ export const GEOMETRY_SCHEMAS = {
     name: 'Custom profile',
     fields: [
       f('wall', 'Wall thickness', 'mm', 0, 5, 0.05, 'Added to the profile for the outer surface.'),
-      f('tipBevelDeg', 'Tip bevel angle', '°', 0, 70, 1, 'Angle of the bevel cut at the distal end (0 = square cut).'),
-      f('bevelClockDeg', 'Bevel orientation', '°', 0, 360, 1, 'Which side of the tip is the long side of the bevel.'),
+      f('tipBevelDeg', 'Tip bevel angle', '°', 0, 85, 1, 'Angle between the bevel face and the part axis (0 = square cut).'),
+      f('bevelClockDeg', 'Bevel orientation', '°', 0, 360, 1, 'Which side of the tip is the long side of the bevel (270 = the floor of the cartridge).'),
     ],
     defaults: { wall: 0.3, tipBevelDeg: 0, bevelClockDeg: 270, points: [[0, 1.5, 1.5], [10, 1.5, 1.5], [20, 0.8, 0.7], [30, 0.8, 0.7]] },
     hasPoints: true,
@@ -56,7 +56,6 @@ export const GEOMETRY_SCHEMAS = {
 const env = [
   f('tilt', 'Axis tilt from vertical', '°', 0, 180, 1, '0 = vertical with s = 0 at the top (an IOL cartridge then stands proximal end up, tip down; this is its default); 90 = horizontal.'),
   f('tempC', 'Room / oven temperature', '°C', -10, 250, 1, 'Air temperature around the part; the part follows it with the heat-up lag.'),
-  f('rpm', 'Part rotation', 'rpm', 0, 600, 1, 'Rotation about the part axis (0 = stationary).'),
   f('ambientAir', 'Ambient air speed', 'm/s', 0, 30, 0.1, 'Background air movement (evaporation).'),
 ];
 
@@ -101,7 +100,8 @@ export const STAGE_SCHEMAS = {
       f('coneDeg', 'Spray cone angle', '°', 2, 120, 1, ''),
       f('startMm', 'Traverse start', 'mm', -100, 500, 0.5, ''),
       f('endMm', 'Traverse end', 'mm', -100, 1e9, 0.5, ''),
-      f('clockDeg', 'Nozzle clock angle', '°', 0, 360, 1, '90 = from above (horizontal part).'),
+      f('nozzles', 'Nozzles around the part', '', 1, 8, 1, 'Fixed nozzles spaced evenly around the part (it does not rotate); the flow is split between them.', { main: true, sl: [1, 8, 'lin'] }),
+      f('clockDeg', 'Nozzle clock angle', '°', 0, 360, 1, 'Position of the first nozzle; 90 = from above (horizontal part).'),
       f('inFlightEvapPct', 'In-flight solvent loss', '%', 0, 90, 1, ''),
       f('lanceSigmaMm', 'Lance spray width (bore)', 'mm', 0.1, 20, 0.1, ''),
       f('drainAfter', 'Settle time', 's', 0, 3600, 1, ''),
@@ -190,7 +190,6 @@ export const STAGE_SCHEMAS = {
       f('uvIntensity', 'UV intensity', 'mW/cm²', 0, 5000, 1, '', { main: true, sl: [5, 1000, 'log'], cure: 'uv' }),
       f('uvTransmission', 'UV transmission into bore', '', 0, 1, 0.01, '', { cure: 'uv' }),
       f('tilt', 'Axis tilt from vertical', '°', 0, 180, 1, ''),
-      f('rpm', 'Part rotation', 'rpm', 0, 600, 1, ''),
       f('ambientAir', 'Oven air speed', 'm/s', 0, 30, 0.1, ''),
     ],
   },

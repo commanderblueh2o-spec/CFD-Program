@@ -116,13 +116,13 @@ export const PRESETS = [
   },
   {
     id: 'catheter_spray_pu',
-    name: 'Catheter shaft — rotating spray, polyurethane topcoat',
-    description: 'Horizontal rotating shaft sprayed by a traversing nozzle, flashed and air dried.',
+    name: 'Catheter shaft — spray, polyurethane topcoat',
+    description: 'Stationary vertical shaft sprayed by three traversing nozzles spaced around it, flashed and air dried.',
     geometry: { type: 'catheter', length: 60, od: 2.0, id: 1.4 }, surface: 'outer', substrate: 'tpu', coating: 'pu_thf',
     grid: { ns: 120, nphi: 24 },
     stages: [
-      { type: 'spray', label: 'Spray', flowMlMin: 3, transferEff: 0.6, standoffMm: 40, coneDeg: 25, traverseMmS: 30, passes: 4, startMm: -5, endMm: 65, rpm: 120, tilt: 90, drainAfter: 5 },
-      { type: 'dwell', label: 'Air dry', duration: 120, rpm: 30, tilt: 90, ambientAir: 0.5 },
+      { type: 'spray', label: 'Spray', flowMlMin: 3, transferEff: 0.6, standoffMm: 40, coneDeg: 25, traverseMmS: 30, passes: 4, startMm: -5, endMm: 65, nozzles: 3, tilt: 0, drainAfter: 5 },
+      { type: 'dwell', label: 'Air dry', duration: 120, tilt: 0, ambientAir: 0.5 },
     ],
     metrics: { zone: [3, 57] },
   },
