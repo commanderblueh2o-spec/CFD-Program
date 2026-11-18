@@ -96,6 +96,19 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 - [x] Tip close-up is exactly side-on, so the cut shows as a straight line at its true angle
 
 ## Next
+### Owner priorities (2026-11-17) — work these first, in order
+- [ ] **Coating volume in 3D, especially at the tip.** Check that what is drawn matches the simulated liquid volume. The rendered coating layer (film plus flooded cells), integrated over the drawn geometry at true scale, should equal the film and pool volumes in the mass balance. Add a test and a UI check.
+  - The tip pool is held as a lumped volume (`pool[1]`) that is drawn by flooding every cell within `poolReach`. Instead, draw it as a meniscus-shaped body whose volume equals the pool (filling up from the long-side point of the bevel, with a curved free surface), and show its volume.
+  - Resolve the tip better: check grid resolution over the ~1.9 mm bevel (only ~6 rows at ns = 120). Consider axial grid refinement toward the tip, and check that the liquid on the exposed bevel face and its edge bead are captured.
+  - Plugs and the full bore during fill should show the meniscus shape at the plug ends, not a flat block.
+- [ ] **More realistic graphics.**
+  - Translucent liquid with a refraction-like tint and thickness-dependent opacity (thin films pale, thick ones deep blue).
+  - Specular highlights and a soft environment light.
+  - Proper translucent cartridge plastic (PP/PC) with edge darkening (fresnel).
+  - Soft shadows or ambient occlusion in the bore.
+  - A smooth meniscus at contact lines and film fronts.
+  - The cured HA film as a thin glossy layer.
+  - Keep it fast (the animation must stay smooth), and screenshot before and after.
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
 - [ ] Make the lumen dip column drainage / tip pooling less sensitive to tiny parameter changes (see v0.6 robustness note)
