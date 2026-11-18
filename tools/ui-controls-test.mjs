@@ -22,7 +22,7 @@ await p.waitForTimeout(300);
 const g = await p.evaluate(() => JSON.parse(localStorage.getItem('coatsim.spec')));
 const pts = g.geometry.points || [];
 const ok3 = g.geometry.type === 'custom' && pts.length === 4 && Math.abs(pts[0][1] - 2.794) < 1e-6 && Math.abs(pts[3][0] - 35.56) < 1e-6
-  && g.geometry.tipBevelDeg === 45 && g.metrics.zone && g.metrics.zone[1] <= 35.56;
+  && g.geometry.tipBevelDeg === 35 && g.metrics.zone && g.metrics.zone[1] <= 35.56;
 console.log(`profile import -> ${g.geometry.type}, ${pts.length} pts, r0 ${pts[0]?.[1]} mm, L ${pts[pts.length - 1]?.[0]} mm, zone ${g.metrics.zone} ${ok3 ? 'OK' : 'FAIL'}`);
 // Bad file: rejected with an error toast, geometry unchanged
 await p.locator('.profio input[type=file]').setInputFiles({ name: 'bad.csv', mimeType: 'text/csv', buffer: Buffer.from('s,d\n0,1\n') });

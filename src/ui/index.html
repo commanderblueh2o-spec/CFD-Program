@@ -69,7 +69,12 @@
       <div class="legend" id="legend"></div>
     </div>
     <div class="views">
-      <div class="view active" id="v3d"><div class="overlay" id="ovl3d"></div><div class="empty" id="empty3d">Pick a preset (top left), adjust the settings, then press <b>&nbsp;▶ Run</b>.</div></div>
+      <div class="view active" id="v3d"><div class="overlay" id="ovl3d"></div><div class="navhelp" id="navhelp"><button class="navbtn" id="navHome" title="Home view (Home or H)">⌂</button><button class="navbtn" id="navFit" title="Fit the part to the view (F6, or double-click middle button)">⤢</button><details open><summary title="Camera controls (Fusion 360 style)">Mouse</summary><dl>
+<dt>Orbit</dt><dd><kbd>Shift</kbd> + middle-drag <span>or left-drag</span></dd>
+<dt>Pan</dt><dd>Middle-drag <span>or right-drag</span></dd>
+<dt>Zoom</dt><dd>Scroll (zooms to the cursor)</dd>
+<dt>Fit</dt><dd>Double-click middle · <kbd>F6</kbd></dd>
+<dt>Home</dt><dd><kbd>Home</kbd> · <kbd>H</kbd></dd></dl></details></div><div class="empty" id="empty3d">Pick a preset (top left), adjust the settings, then press <b>&nbsp;▶ Run</b>.</div></div>
       <div class="view" id="map"><div id="mapInner" style="height:100%"></div></div>
       <div class="view grid-charts" id="charts"><div id="chAxial"></div><div id="chCirc"></div><div id="chThick"></div><div id="chCure"></div><div id="chTemp"></div><div id="chVisc"></div></div>
       <div class="view" id="sweep"><div id="sweepForm" class="sweep-form"></div><div class="grid3" id="sweepCharts"><div id="swA"></div><div id="swB"></div><div id="swC"></div></div><div id="sweepTable"></div></div>

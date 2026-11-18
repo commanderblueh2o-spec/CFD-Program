@@ -163,6 +163,7 @@ export function buildGeometry(spec) {
   return {
     spec, surface: surf, flat, periodic: !flat, Ni, Nj, N, ds, dphi, L: Lm, s, phi, A, B,
     w, area, kc, nrm, es, ep, pos, crossArea, perim, rHyd, voidMask, edgeEnd, endCell, hasVoid: voidMask.some((v) => v),
+    bevel: { deg: (bev * 180) / Math.PI, clockDeg: (cb * 180) / Math.PI, qmax },
   };
 }
 

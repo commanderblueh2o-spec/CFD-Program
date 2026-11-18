@@ -346,7 +346,7 @@ function previewGeometry(force) {
   if (!force && state.result && state.resultSpecKey === specKey(state.spec)) return;
   try {
     const geo = buildGeometry(state.spec);
-    const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm), voidMask: geo.voidMask };
+    const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm), voidMask: geo.voidMask, edgeEnd: geo.edgeEnd, bevel: geo.bevel };
     view3d.setGeometry(sg);
     const st0 = state.spec.stages[0];
     view3d.tilt = st0 ? st0.tilt ?? STAGE_DEFAULTS[st0.type].tilt ?? 90 : 90;
@@ -569,7 +569,7 @@ function activityOf(fr, st) {
     case 'vacuum': if (fr.aux.air) { fx.push({ kind: 'air', speed: fr.aux.air, dir: st.direction === 'back' ? -1 : 1, hot: false }); bits.push(`Vacuum drawing air through (${fmt(fr.aux.airScfh ?? 0)} SCFH)`); } else bits.push(`Vacuum pulling the liquid out${fr.aux.speed ? ` at ${fmt(fr.aux.speed * 1e3)} mm/s` : ''}`); break;
     case 'airflow':
       if (st.nozzleSpeed > 0 || st.airFlowScfh > 0) { const hot = st.airTempC > 40; fx.push({ kind: 'air', speed: st.airFlowScfh > 0 ? st.airFlowScfh / 4 : st.nozzleSpeed, dir: st.fromEnd === 'end' ? -1 : 1, hot }); bits.push(`${hot ? `Heated air ${st.airTempC} °C` : 'Air'} ${st.airFlowScfh > 0 ? st.airFlowScfh + ' SCFH' : fmt((st.nozzleSpeed * Math.PI * (st.nozzleDiaMm || 2) ** 2 / 4e6) / 7.8658e-6) + ' SCFH'} ${inner ? 'down the bore' : 'over the part'}`); if (hot) bg = 'fx-warm'; }
-      if (jetScfh(st) > 0 && st.crossJetEnd !== 'none') { fx.push({ kind: 'cross', end: st.crossJetEnd }); bits.push(`horizontal jets ${fmt(jetScfh(st))} SCFH clearing the ${st.crossJetEnd === 'end' ? 'tip bevel' : 'top opening'}`); }
+      if (jetScfh(st) > 0 && st.crossJetEnd !== 'none') { fx.push({ kind: 'cross', end: st.crossJetEnd }); bits.push(st.crossJetEnd === 'end' ? `horizontal jets ${fmt(jetScfh(st))} SCFH blowing into the long side of the bevel, ejecting excess off the tip` : `horizontal jets ${fmt(jetScfh(st))} SCFH across the top opening`); }
       if (fr.aux && fr.aux.meniscus !== undefined && fr.aux.front !== undefined) bits.push('liquid plug in the bore');
       break;
     case 'dwell': bits.push(`Resting at ${st.tempC} °C — levelling, draining and drying`); break;
@@ -1044,6 +1044,7 @@ function setSpec(spec) {
 function init() {
   $('#ver').textContent = VERSION;
   view3d = new View3D($('#v3d'));
+  window.coatsimView = view3d; // handle for headless camera checks
   heatmap = new Heatmap($('#mapInner'));
   chAxial = new LineChart($('#chAxial')); chCirc = new LineChart($('#chCirc'));
   chThick = new LineChart($('#chThick')); chCure = new LineChart($('#chCure')); chTemp = new LineChart($('#chTemp')); chVisc = new LineChart($('#chVisc'));
@@ -1061,6 +1062,10 @@ function init() {
   $('#cutaway').addEventListener('change', () => { view3d.cutaway = $('#cutaway').checked; view3d.render(); });
   $('#radial').addEventListener('change', () => { view3d.radialMode = $('#radial').value; if (state.result) { view3d.setGeometry(state.result.geometry); updateViews(); } else previewGeometry(true); });
   $('#resetView').addEventListener('click', () => view3d.resetView());
+  $('#navHome').addEventListener('click', () => view3d.resetView());
+  $('#navFit').addEventListener('click', () => view3d.fitView());
+  // the help panel starts open once, then remembers whether the user collapsed it
+  try { const d = $('#navhelp details'); if (localStorage.getItem('coatsim.navhelp') === 'closed') d.open = false; d.addEventListener('toggle', () => localStorage.setItem('coatsim.navhelp', d.open ? 'open' : 'closed')); } catch (e) { /* storage unavailable */ }
   $('#viewOpts').addEventListener('click', (e) => { e.stopPropagation(); $('#viewPanel').hidden = !$('#viewPanel').hidden; });
   $('#viewPanel').addEventListener('click', (e) => e.stopPropagation());
   $('#frame').addEventListener('input', (e) => { setPlaying(false); state.p = Number(e.target.value) / 100; updateViews(); });

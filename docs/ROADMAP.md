@@ -66,6 +66,12 @@ Finding: with the SAICCS heated preset the readable axial profile shows the film
 
 Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s thins the dry film by 38% (1.27 → 0.79 µm) and doubles the CoV (37% → 75%); the film is thinner on 90% of the evaluation zone, most of all in the nozzle (−1.5 µm at s ≈ 34 mm), while the corner stripes of the oval bore get slightly thicker. The cure rises 72% → 77% because the thinner film dries sooner.
 
+## Done (v0.8.1) — tip jets, 35° bevel, smooth model, Fusion-style camera (owner feedback)
+- [x] Horizontal tip jets drawn blowing across the opening into the long side of the bevel, parallel to the bevel plane, with excess ejected straight off the tip (head/tail streaks show the travel direction)
+- [x] Default cartridge bevel 35°
+- [x] Smooth 3D model: the exact elliptical section with 4× circumferential subdivision, blended colours, and vertices clamped onto the cut plane (no stepped bevel); the surface map is interpolated
+- [x] Fusion 360 camera: middle-drag pan, Shift + middle-drag orbit, wheel zoom about the surface under the cursor (the orbit pivot lands on the part), double-click middle / F6 to fit, Home / H for the home view; a controls panel and Home/Fit buttons in the corner
+
 ## Next
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner

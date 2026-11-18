@@ -50,7 +50,7 @@ export class Heatmap {
     cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
     const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    g.imageSmoothingEnabled = false;
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; // blend cells instead of showing blocks
     g.drawImage(this.img, L, T, W - L - R, H - T - B);
     const st = getComputedStyle(document.documentElement);
     g.fillStyle = st.getPropertyValue('--text-muted'); g.font = '11px system-ui';

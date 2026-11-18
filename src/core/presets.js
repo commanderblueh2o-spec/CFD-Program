@@ -2,7 +2,7 @@
 
 export const IOL_CARTRIDGE = {
   type: 'iol_cartridge', chamberLength: 12, chamberWidth: 5.6, chamberHeight: 4.0,
-  taperLength: 14, nozzleWidth: 2.1, nozzleHeight: 1.7, nozzleLength: 10, tipWidth: 1.7, tipHeight: 1.35, wall: 0.6, tipBevelDeg: 45, bevelClockDeg: 270,
+  taperLength: 14, nozzleWidth: 2.1, nozzleHeight: 1.7, nozzleLength: 10, tipWidth: 1.7, tipHeight: 1.35, wall: 0.6, tipBevelDeg: 35, bevelClockDeg: 270,
 };
 
 export const PRESETS = [

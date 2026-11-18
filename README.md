@@ -10,7 +10,7 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 | **Drip / pump insertion** | A fixed inserter nozzle fed by a peristaltic pump (rate and volume), discrete drops, or a bead laid by a moving needle; several nozzles can be spaced around the bore. Liquid that collects in a narrowing bore bridges into a plug, which drains, is pushed out by air, or stays held by capillarity. |
 | **Fill, dwell & withdraw (pumps)** | SAICCS insertion. Coating is pumped into the proximal opening while a peristaltic withdraw pump on the tip pulls it through (priming). The withdraw pump stops, the cartridge fills and dwells (held by back-pressure), then it is pumped out. The pump fixes the flow, so the meniscus speed is Q/A(s): slow in the wide chamber, fast in the nozzle. That sets the Bretherton film along the bore. |
 | **Vacuum withdraw** | Lumen filled, then a regulated vacuum pulls the plug through or back out. Poiseuille plug dynamics with capillary pressures, Bretherton film versus meniscus speed, then air draw. |
-| **HACS airflow: heated down-draft and bevel blow-off** | Heated air set in SCFH (converted to jet velocity via the nozzle diameter, with the fraction entering the bore as a setting). The air cools along the bore through duct heat transfer, and the wall heats up with a thermal lag, which cures thermal coatings from the inside. Its pressure pushes liquid plugs out. Horizontal jets (also in SCFH, with their nozzle diameter) aligned with the tip bevel strip excess at the tip; a misalignment angle shows how off-axis jets also shear the coating on the bevel face. |
+| **HACS airflow: heated down-draft and bevel blow-off** | Heated air set in SCFH (converted to jet velocity via the nozzle diameter, with the fraction entering the bore as a setting). The air cools along the bore through duct heat transfer, and the wall heats up with a thermal lag, which cures thermal coatings from the inside. Its pressure pushes liquid plugs out. Horizontal jets (also in SCFH, with their nozzle diameter) blow across the tip opening into the long side of the bevel (35° by default), angled with the bevel, so excess is ejected straight off the tip; a misalignment angle shows how off-axis jets also shear the coating on the bevel face. |
 | **Flash-off / dwell** | Levelling, drainage, sag and drying under a set temperature, tilt, rotation and air speed. |
 | **Cure** | Stationary thermal oven (the part heats up with a lag, then Arrhenius crosslinking) or UV (dose-driven). Viscosity rises to gelation and freezes the film. |
 
@@ -29,6 +29,8 @@ CoatSim is a browser-based CFD tool for exploring how **liquid coatings wet, flo
 - **Parameter sweeps:** vary any stage, coating, geometry or substrate parameter and chart thickness, uniformity and coverage.
 - **A/B comparison:** pin a run as reference A, change settings and re-run to see the metric deltas, a plain-language list of changed settings, and a difference map of the final dry film (also for different grids or part lengths).
 - **Save and load** setups, shareable links, and CSV/JSON/PNG export.
+
+**3D view controls (Fusion 360 style):** middle-drag to pan, Shift + middle-drag to orbit, scroll to zoom toward the cursor, and double-click the middle button (or F6) to fit. Home or H returns to the home view. Left-drag orbit and right-drag pan also work on trackpads, and a controls panel sits in the corner of the view.
 
 ## Geometries and materials
 

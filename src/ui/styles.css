@@ -205,3 +205,19 @@ table.kv.diff td:nth-child(2) { text-align: right; color: var(--text-muted); whi
 table.kv.diff td:last-child { white-space: nowrap; }
 .cmp .cmp-name { margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cmp table.cmp-t td:not(:first-child) { white-space: nowrap; }
+
+/* camera navigation help (bottom-left of the 3D view) */
+.navhelp { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; align-items: flex-end; gap: 6px; font-size: 11px; color: #aab3c2; pointer-events: none; }
+.navhelp > * { pointer-events: auto; }
+.navbtn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid #2c3442; background: rgba(16,19,25,.82); color: #d6dce6; font-size: 15px; cursor: pointer; }
+.navbtn:hover { background: #222a37; color: #fff; }
+.navhelp details { background: rgba(16,19,25,.82); border: 1px solid #2c3442; border-radius: 6px; padding: 4px 8px; backdrop-filter: blur(3px); }
+.navhelp summary { cursor: pointer; color: #d6dce6; font-weight: 600; list-style: none; line-height: 18px; }
+.navhelp summary::before { content: '🖱 '; }
+.navhelp details[open] summary { margin-bottom: 3px; }
+.navhelp dl { display: grid; grid-template-columns: auto auto; gap: 2px 10px; margin: 0; }
+.navhelp dt { color: #d6dce6; font-weight: 600; }
+.navhelp dd { margin: 0; }
+.navhelp dd span { color: #6f7889; }
+.navhelp kbd { font: inherit; font-size: 10px; padding: 0 4px; border: 1px solid #3a4352; border-bottom-width: 2px; border-radius: 3px; background: #1a2029; color: #d6dce6; }
+#v3d canvas:focus { outline: none; }

@@ -51,24 +51,99 @@ export class View3D {
     this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       lpos: gl.createBuffer(), lcol: gl.createBuffer() };
-    this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.pan = [0, 0];
+    this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.tgt = [0, 0, 0];
     this.cutaway = true; this.exag = 0; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
+    // Fusion 360-style navigation: middle-drag pans, Shift + middle-drag orbits, the wheel
+    // zooms about the cursor, double-click middle fits. Left-drag orbit / right-drag pan stay
+    // as fallbacks for trackpads.
     let drag = null;
-    this.canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, b: e.button, shift: e.shiftKey }; this.canvas.setPointerCapture(e.pointerId); });
+    this.canvas.style.touchAction = 'none';
+    this.canvas.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); }); // no autoscroll
+    this.canvas.addEventListener('pointerdown', (e) => {
+      if (e.button === 1) e.preventDefault();
+      drag = { x: e.clientX, y: e.clientY, b: e.button };
+      this.canvas.setPointerCapture(e.pointerId);
+      this.canvas.style.cursor = this._dragMode(e) === 'pan' ? 'grabbing' : 'move';
+    });
     this.canvas.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
-      if (drag.b === 2 || drag.shift) { this.pan[0] += dx * 0.003 * this.dist; this.pan[1] -= dy * 0.003 * this.dist; }
-      else { this.yaw += dx * 0.008; this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008)); }
+      if (this._dragMode({ button: drag.b, shiftKey: e.shiftKey }) === 'pan') this.panBy(dx, dy);
+      else { this.yaw -= dx * 0.008; this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008)); }
       this.render();
     });
-    this.canvas.addEventListener('pointerup', () => { drag = null; });
+    const end = () => { drag = null; this.canvas.style.cursor = ''; };
+    this.canvas.addEventListener('pointerup', end); this.canvas.addEventListener('pointercancel', end);
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    this.canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.dist = Math.max(0.4, Math.min(20, this.dist * Math.exp(e.deltaY * 0.001))); this.render(); }, { passive: false });
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const r = this.canvas.getBoundingClientRect();
+      this.zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
+    }, { passive: false });
+    let lastMid = 0;
+    this.canvas.addEventListener('auxclick', (e) => {
+      if (e.button !== 1) return;
+      const now = performance.now(); if (now - lastMid < 400) this.fitView(); lastMid = now;
+    });
+    this.canvas.addEventListener('dblclick', () => this.fitView());
+    this.canvas.tabIndex = 0;
+    this.canvas.addEventListener('keydown', (e) => {
+      if (e.key === 'F6' || e.key === 'f') { e.preventDefault(); this.fitView(); }
+      else if (e.key === 'Home' || e.key === 'h') { e.preventDefault(); this.resetView(); }
+    });
+    this.canvas.addEventListener('pointerenter', () => this.canvas.focus({ preventScroll: true }));
     new ResizeObserver(() => this.render()).observe(this.el);
   }
 
   resetView() { this.autoCamera(true); this.render(); }
+  fitView() { const y = this.yaw, p = this.pitch; this.autoCamera(true); this.yaw = y; this.pitch = p; this.render(); }
+  _dragMode(e) { return (e.button === 1 && !e.shiftKey) || e.button === 2 ? 'pan' : 'orbit'; }
+  _basis() {
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch), sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
+    const back = [cp * sy, sp, cp * cy], right = [cy, 0, -sy];
+    const up = [back[1] * right[2] - back[2] * right[1], back[2] * right[0] - back[0] * right[2], back[0] * right[1] - back[1] * right[0]];
+    return { back, right, up };
+  }
+  _worldPerPx() { return (2 * this.dist * Math.tan(0.375)) / Math.max(1, this.el.clientHeight); }
+  // grab-style pan: the part follows the cursor
+  panBy(dx, dy) {
+    const { right, up } = this._basis(), k = this._worldPerPx();
+    for (let c = 0; c < 3; c++) this.tgt[c] += (-dx * right[c] + dy * up[c]) * k;
+  }
+  // World point of the visible surface under the cursor (mx, my = pixels from the view
+  // centre), or null. CPU pick over the render vertices: nearest-in-depth within a few px.
+  pickAt(mx, my) {
+    if (!this._mvp || !this._posW) return null;
+    const W = this.el.clientWidth, H = this.el.clientHeight, M = this._mvp, P = this._posW, C = this._cutV;
+    let best = null, bestZ = Infinity, bestD = 14 * 14;
+    for (let v = 0, n = P.length / 3; v < n; v++) {
+      if (this.cutaway && C && C[v]) continue;
+      const x = P[3 * v], y = P[3 * v + 1], z = P[3 * v + 2];
+      const w = M[3] * x + M[7] * y + M[11] * z + M[15]; if (w <= 1e-6) continue;
+      const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w) * W / 2, sy = -((M[1] * x + M[5] * y + M[9] * z + M[13]) / w) * H / 2;
+      const d2 = (sx - mx) ** 2 + (sy - my) ** 2;
+      if (d2 > bestD) continue;
+      const zz = (M[2] * x + M[6] * y + M[10] * z + M[14]) / w;
+      if (d2 < 9 ? zz < bestZ : !best) { best = [x, y, z]; bestZ = zz; if (d2 >= 9) bestD = d2; }
+    }
+    return best;
+  }
+  // Zoom about the point under the cursor: the surface point if there is one (so the pivot
+  // lands on the part, as in Fusion 360), otherwise the point at the current target depth.
+  zoomAt(f, mx, my) {
+    const d0 = this.dist, d1 = Math.max(0.01, Math.min(20, d0 * f)), r = d1 / d0;
+    const { back, right, up } = this._basis(), k = this._worldPerPx();
+    let p = this.pickAt(mx, my);
+    if (!p) p = [0, 1, 2].map((c) => this.tgt[c] + k * (mx * right[c] - my * up[c]));
+    // the camera moves along the ray through p; the new target is where that view axis
+    // meets the plane through p, so later orbits pivot on the part
+    const eye = [0, 1, 2].map((c) => this.tgt[c] + back[c] * d0);
+    const eye2 = [0, 1, 2].map((c) => p[c] + (eye[c] - p[c]) * r);
+    const depth = [0, 1, 2].reduce((acc, c) => acc + (eye2[c] - p[c]) * back[c], 0);
+    this.tgt = [0, 1, 2].map((c) => eye2[c] - back[c] * depth);
+    this.dist = Math.max(0.01, depth);
+    this.render();
+  }
 
   // Default camera: look into the cut-open half (body +y side is removed by the cutaway).
   autoCamera(force) {
@@ -76,50 +151,77 @@ export class View3D {
     this._camTilt = this.tilt;
     const vertical = this.tilt < 45 || this.tilt > 135;
     if (vertical) { this.yaw = 1.05; this.pitch = 0.3; this.dist = 3.4; } else { this.yaw = -0.5; this.pitch = 0.55; this.dist = 2.7; }
-    this.pan = [0, 0];
+    this.tgt = [0, 0, 0];
   }
 
   // geo: serialised geometry; ghost: wall radius offset for the context shell
+  // The render mesh is finer than the simulation grid: the cross-section is drawn from the
+  // exact ellipse with SUB vertices per cell around the circumference, values are blended
+  // between cell centres, the mesh runs to the true ends of the part, and at a bevelled tip
+  // the vertices sit on the cut plane (smooth slanted edge instead of stepped cells).
   setGeometry(geo) {
     this.geo = geo;
     const { Ni, Nj, flat } = geo;
-    const cols = flat ? Nj : Nj + 1;
+    const SUB = flat ? 1 : 4;
+    this.SUB = SUB;
+    const cols = flat ? Nj : Nj * SUB + 1;
     this.cols = cols;
     const idx = [];
-    const vm = geo.voidMask;
-    const isV = (i, jj) => !!(vm && vm[i * Nj + (jj % Nj)]);
     for (let i = 0; i < Ni - 1; i++) for (let j = 0; j < cols - 1; j++) {
-      if (isV(i, j) || isV(i, j + 1) || isV(i + 1, j) || isV(i + 1, j + 1)) continue; // bevel cut-away
       const a = i * cols + j, b = a + 1, c = a + cols, d = c + 1;
       idx.push(a, c, b, b, c, d);
     }
     this.nIdx = idx.length;
+    // per render column: the bevel cut position and the last existing simulation row
+    const vm = geo.voidMask, ee = geo.edgeEnd;
+    this.cutS = new Float32Array(cols); this.lastRow = new Int32Array(Nj);
+    for (let j = 0; j < Nj; j++) { let r = Ni - 1; while (r > 0 && vm && vm[r * Nj + j]) r--; this.lastRow[j] = r; }
+    const cutAtCell = (j) => (ee ? geo.s[this.lastRow[j]] + ee[this.lastRow[j] * Nj + j] : geo.L);
+    for (let u = 0; u < cols; u++) {
+      if (flat) { this.cutS[u] = geo.L; continue; }
+      const j = Math.floor(u / SUB) % Nj, f = (u % SUB) / SUB, j2 = (j + 1) % Nj;
+      this.cutS[u] = Math.min(geo.L, cutAtCell(j) * (1 - f) + cutAtCell(j2) * f);
+    }
     const gl = this.gl; if (!gl) return;
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
     gl.getExtension('OES_element_index_uint');
     let rmax = 0;
     for (let i = 0; i < Ni; i++) rmax = Math.max(rmax, geo.A[i], geo.B[i] || 0);
-    // slender parts: optionally scale the radius so the part is visible
     this.radial = this.radialMode === 'auto' && !geo.flat ? Math.max(1, geo.L / 10 / (2 * rmax)) : 1;
     this.scale = 2.2 / Math.max(geo.L, 2 * rmax * this.radial * 1.2);
     this._camTilt = undefined;
     this.rmax = rmax;
-    // ghost shell (outer wall for lumen views, nothing otherwise)
     this.hasGhost = geo.surface === 'inner';
     if (this.hasGhost) {
       const n = Ni * cols, gp = new Float32Array(3 * n), gn = new Float32Array(3 * n), gc = new Float32Array(3 * n), gcut = new Float32Array(n);
       const wall = Math.max(0.15 * rmax, 0.2e-3);
-      for (let i = 0; i < Ni; i++) for (let jj = 0; jj < cols; jj++) {
-        const j = jj % Nj, k = i * Nj + j, v = i * cols + jj;
-        const nx = -geo.nrm[3 * k], ny = -geo.nrm[3 * k + 1], nz = -geo.nrm[3 * k + 2];
-        gp[3 * v] = (geo.pos[3 * k] + nx * wall) * this.radial; gp[3 * v + 1] = (geo.pos[3 * k + 1] + ny * wall) * this.radial; gp[3 * v + 2] = geo.pos[3 * k + 2];
-        gn[3 * v] = nx; gn[3 * v + 1] = ny; gn[3 * v + 2] = nz;
+      for (let i = 0; i < Ni; i++) for (let u = 0; u < cols; u++) {
+        const v = i * cols + u, P = this.vertex(i, u, 0);
+        gp[3 * v] = P.x - P.nx * wall * this.radial; gp[3 * v + 1] = P.y - P.ny * wall * this.radial; gp[3 * v + 2] = P.z;
+        gn[3 * v] = -P.nx; gn[3 * v + 1] = -P.ny; gn[3 * v + 2] = 0;
         gc[3 * v] = 0.55; gc[3 * v + 1] = 0.6; gc[3 * v + 2] = 0.68;
-        gcut[v] = geo.pos[3 * k + 1] > 1e-9 ? 1 : 0;
+        gcut[v] = P.y > 1e-9 * this.radial ? 1 : 0;
       }
       this.upload('gpos', gp); this.upload('gnrm', gn); this.upload('gcol', gc); this.upload('gcut', gcut);
     }
+  }
+
+  // Render vertex (row i, render column u) displaced by d along the film normal.
+  vertex(i, u, d) {
+    const geo = this.geo, { Ni, Nj } = geo;
+    let z = i === 0 ? 0 : i === Ni - 1 ? geo.L : geo.s[i];
+    z = Math.min(z, this.cutS[u]);
+    if (geo.flat) {
+      const k = i * Nj + u;
+      return { x: geo.pos[3 * k] + geo.nrm[3 * k] * d, y: geo.pos[3 * k + 1] + geo.nrm[3 * k + 1] * d, z, nx: geo.nrm[3 * k], ny: geo.nrm[3 * k + 1] };
+    }
+    const ph = geo.phi[0] + (u / this.SUB) * ((2 * Math.PI) / Nj);
+    const a = geo.A[i], b = geo.B[i], c = Math.cos(ph), sn = Math.sin(ph);
+    let nx = b * c, ny = a * sn; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+    if (geo.surface === 'inner') { nx = -nx; ny = -ny; }
+    const R = this.radial;
+    return { x: (a * c + nx * d) * R, y: (b * sn + ny * d) * R, z, nx, ny };
   }
 
   upload(name, arr) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW); }
@@ -127,22 +229,38 @@ export class View3D {
   // opts: {values, range, cmap, film (m), markers, bare (Uint8), rgb (Float32 3/cell, overrides cmap), gloss (0..1/cell)}
   setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null) {
     const geo = this.geo; if (!geo || !this.gl) return;
-    const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols;
+    const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols, SUB = this.SUB;
     const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n), gls = new Float32Array(n);
     const [lo, hi] = range;
     const ex = this.exag;
-    for (let i = 0; i < Ni; i++) for (let jj = 0; jj < cols; jj++) {
-      const j = jj % Nj, k = i * Nj + j, v = i * cols + jj;
-      const d = film && ex > 0 ? film[k] * ex : 0;
-      for (let c = 0; c < 3; c++) { pos[3 * v + c] = (geo.pos[3 * k + c] + (c < 2 || geo.flat ? geo.nrm[3 * k + c] * d : 0)) * (c < 2 ? this.radial : 1); nrm[3 * v + c] = geo.nrm[3 * k + c]; }
-      if (bare && bare[k]) { col[3 * v] = 0.50; col[3 * v + 1] = 0.52; col[3 * v + 2] = 0.56; }
-      else if (rgbOverride) { col[3 * v] = rgbOverride[3 * k]; col[3 * v + 1] = rgbOverride[3 * k + 1]; col[3 * v + 2] = rgbOverride[3 * k + 2]; }
-      else {
-        const rgb = colorAt(cmap, 0.2 + 0.8 * Math.max(0, Math.min(1, (values[k] - lo) / (hi - lo))));
-        col[3 * v] = rgb[0] / 255; col[3 * v + 1] = rgb[1] / 255; col[3 * v + 2] = rgb[2] / 255;
-      }
-      gls[v] = glossField && !(bare && bare[k]) ? glossField[k] : 0;
-      cut[v] = geo.surface === 'inner' && geo.pos[3 * k + 1] > 1e-9 ? 1 : 0;
+    // per-cell colour / gloss / displacement, then blended to the render vertices
+    const N = geo.N, cc = new Float32Array(3 * N), cg = new Float32Array(N), cd = new Float32Array(N);
+    for (let k = 0; k < N; k++) {
+      if (bare && bare[k]) { cc[3 * k] = 0.50; cc[3 * k + 1] = 0.52; cc[3 * k + 2] = 0.56; }
+      else if (rgbOverride) { cc[3 * k] = rgbOverride[3 * k]; cc[3 * k + 1] = rgbOverride[3 * k + 1]; cc[3 * k + 2] = rgbOverride[3 * k + 2]; }
+      else { const rgb = colorAt(cmap, 0.2 + 0.8 * Math.max(0, Math.min(1, (values[k] - lo) / (hi - lo)))); cc[3 * k] = rgb[0] / 255; cc[3 * k + 1] = rgb[1] / 255; cc[3 * k + 2] = rgb[2] / 255; }
+      cg[k] = glossField && !(bare && bare[k]) ? glossField[k] : 0;
+      cd[k] = film && ex > 0 ? film[k] * ex : 0;
+    }
+    for (let i = 0; i < Ni; i++) for (let u = 0; u < cols; u++) {
+      const v = i * cols + u;
+      let j = geo.flat ? u : Math.floor(u / SUB) % Nj;
+      const f = geo.flat ? 0 : (u % SUB) / SUB, j2 = geo.flat ? j : (j + 1) % Nj;
+      // rows past the bevel take the values of the last existing cell of their column
+      const ia = Math.min(i, this.lastRow[j]), ib = Math.min(i, this.lastRow[j2]);
+      const k1 = ia * Nj + j, k2 = ib * Nj + j2;
+      const d = cd[k1] * (1 - f) + cd[k2] * f;
+      const P = this.vertex(i, u, d);
+      pos[3 * v] = P.x; pos[3 * v + 1] = P.y; pos[3 * v + 2] = P.z;
+      nrm[3 * v] = P.nx; nrm[3 * v + 1] = P.ny; nrm[3 * v + 2] = 0;
+      for (let c = 0; c < 3; c++) col[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
+      gls[v] = cg[k1] * (1 - f) + cg[k2] * f;
+      cut[v] = geo.surface === 'inner' && P.y > 1e-9 * this.radial ? 1 : 0;
+    }
+    {
+      const Mm = this.modelMatrix(), pw = new Float32Array(pos.length);
+      for (let v = 0; v < pos.length; v += 3) for (let c = 0; c < 3; c++) pw[v + c] = Mm[c] * pos[v] + Mm[4 + c] * pos[v + 1] + Mm[8 + c] * pos[v + 2] + Mm[12 + c];
+      this._posW = pw; this._cutV = cut;
     }
     this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut); this.upload('gloss', gls);
     this.markers = markers;
@@ -191,14 +309,27 @@ export class View3D {
           seg([x, y, sPos], [x, y, sPos + len], rgb);
         }
       } else if (e.kind === 'cross') {
-        const sPos = e.end === 'start' ? 0 : L;
-        const [a, b] = this.ringAt(sPos, 1);
-        const span = Math.max(a, b) * 3, n = 24, rgb = [0.75, 0.9, 1.0];
+        // Horizontal tip jets: they blow across the opening from the short side of the bevel
+        // into its long side, angled with the bevel, so excess is ejected straight off the tip.
+        const atEnd = e.end !== 'start';
+        const bv = (atEnd && geo.bevel) || { deg: 0, clockDeg: 270, qmax: geo.A[geo.Ni - 1] };
+        const R = this.radial, cb = (bv.clockDeg * Math.PI) / 180, tb = Math.tan((bv.deg * Math.PI) / 180);
+        const i0 = atEnd ? geo.Ni - 1 : 0;
+        const qmax = (bv.qmax || Math.max(geo.A[i0], geo.B[i0] || 0)) * R;
+        const half = Math.max(geo.A[i0], geo.B[i0] || 0) * R;
+        const ux = Math.cos(cb), uy = Math.sin(cb), px = -uy, py = ux;
+        const n = 30;
         for (let q = 0; q < n; q++) {
-          const phase = ((q * 0.6180339) + t * 1.2) % 1;
-          const x = -span + 2 * span * phase, y = b * (-0.8 + 1.6 * ((q * 0.37) % 1));
-          const z = sPos + (e.end === 'start' ? -1 : 1) * (0.01 * L + 0.02 * L * ((q * 0.53) % 1));
-          seg([x, y, z], [x + 0.25 * span, y, z], rgb);
+          const ph = ((q * 0.6180339) + t * 1.1) % 1;
+          const pLat = half * (-0.8 + 1.6 * ((q * 0.37) % 1));
+          const ql = -2.2 * qmax + 5 * qmax * ph, len = 0.35 * qmax;
+          const off = (0.002 + 0.006 * ((q * 0.53) % 1)) * L; // thin sheet just outside the cut plane
+          const zOf = (qq) => (atEnd ? L - ((qmax - qq) / R) * tb + off : -off);
+          const P = (qq) => [qq * ux + pLat * px, qq * uy + pLat * py, zOf(qq)];
+          const past = ql > qmax ? Math.min(1, (ql - qmax) / (2 * qmax)) : 0;
+          // dim tail + bright head shows the travel direction (short side -> long side -> off the tip)
+          seg(P(ql), P(ql + 0.7 * len), [0.25, 0.4 - 0.1 * past, 0.5]);
+          seg(P(ql + 0.7 * len), P(ql + len), [0.85 - 0.3 * past, 0.95, 1.0]);
         }
       } else if (e.kind === 'needle') {
         const from = e.fromEnd === 'end' ? L * 1.15 : -0.15 * L;
@@ -249,13 +380,13 @@ export class View3D {
     gl.enable(gl.DEPTH_TEST);
     gl.useProgram(this.prog);
     const eye = [this.dist * Math.cos(this.pitch) * Math.sin(this.yaw), this.dist * Math.sin(this.pitch), this.dist * Math.cos(this.pitch) * Math.cos(this.yaw)];
-    const right = [Math.cos(this.yaw), 0, -Math.sin(this.yaw)];
-    const tgt = [right[0] * -this.pan[0], this.pan[1] * -1 * -1, right[2] * -this.pan[0]];
+    const tgt = this.tgt;
     const e2 = [eye[0] + tgt[0], eye[1] + tgt[1], eye[2] + tgt[2]];
     const V = lookAt(e2, tgt, [0, 1, 0]);
-    const P = perspective(0.75, W / H, 0.01, 100);
+    const P = perspective(0.75, W / H, Math.max(1e-4, this.dist * 0.02), this.dist + 20);
     const Mm = this.modelMatrix();
     const MVP = mul(P, V);
+    this._mvp = MVP;
     gl.uniformMatrix4fv(this.loc.uMVP, false, MVP);
     gl.uniformMatrix4fv(this.loc.uModel, false, Mm);
     gl.uniform3fv(this.loc.uEye, e2);

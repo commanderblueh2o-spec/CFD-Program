@@ -1038,7 +1038,7 @@ export function serialiseGeometry(geo) {
     Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic,
     s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B),
     area: Float32Array.from(geo.area), pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm),
-    voidMask: Uint8Array.from(geo.voidMask || new Uint8Array(geo.N)), edgeEnd: Float32Array.from(geo.edgeEnd || new Float64Array(geo.N)),
+    voidMask: Uint8Array.from(geo.voidMask || new Uint8Array(geo.N)), bevel: geo.bevel, edgeEnd: Float32Array.from(geo.edgeEnd || new Float64Array(geo.N)),
     poolReach: [3 * geo.ds, 3 * geo.ds + (geo.hasVoid ? Math.max(...Array.from(geo.endCell, (e) => (geo.Ni - 1 - e) * geo.ds)) : 0)],
   };
 }
