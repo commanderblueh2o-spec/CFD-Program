@@ -3,6 +3,7 @@ import { PentaSolver, solveDense } from '../src/core/linalg.js';
 import { buildGeometry, parseProfileCSV, profileToCSV, tipPoolBody } from '../src/core/geometry.js';
 import { getPreset } from '../src/core/presets.js';
 import { FilmSolver } from '../src/core/film.js';
+import { coatingMesh, meshVolume, heldBody } from '../src/core/drawn.js';
 import { diffSpecs, resampleField, diffStats } from '../src/core/compare.js';
 import { COATINGS, SUBSTRATES, contactAngleOWRK } from '../src/core/materials.js';
 import { levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength, dipSpeedAt, dipWithdrawTable, dipPositionAt } from '../src/core/physics.js';
@@ -269,6 +270,45 @@ test('tip pool drawn as a meniscus body: volume matches the held pool (analytic 
   const film = new Float64Array(geo.N).fill(20e-6), body = tipPoolBody(geo, 2e-9, film, { theta: 0.6 });
   let Vf = 0; for (let k = 0; k < geo.N; k++) if (body.inBody[k]) Vf += film[k] * geo.area[k];
   near(body.Vfilm, Vf, 1e-9, 'film in body'); near(body.V, 2e-9 + Vf, 0.01, 'pool + film');
+  return out.join('; ');
+});
+
+test('drawn coating volume: film layer, full bore and held liquid bodies hold the simulated volume', () => {
+  const out = [];
+  // 1) oval bore (b/a = 0.7) filled to the axis: a 128-sided polygon of the ellipse
+  const ov = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2, id: 1.4, ovality: 0.7 }, surface: 'inner', grid: { ns: 40, nphi: 32 } });
+  const Vbore = Math.PI * 0.7e-3 * 0.49e-3 * 20e-3, Vf = meshVolume(coatingMesh(ov, null, new Uint8Array(ov.N).fill(1)));
+  near(Vf, Vbore, 1e-3, 'flooded oval bore');
+  // 2) thick, varying film in the oval bore (up to 35% of the minor radius, edge bead at the tip):
+  //    drawn wedge volume = Σ film × area although the inner surface shrinks
+  const film = new Float64Array(ov.N);
+  for (let k = 0; k < ov.N; k++) { const i = Math.floor(k / ov.Nj), j = k % ov.Nj; film[k] = 20e-6 * (1 + 0.5 * Math.sin(ov.phi[j]) ** 2) * (1 + 3 * (i / ov.Ni) ** 4) + (i === ov.Ni - 1 ? 60e-6 : 0); }
+  let Vs = 0; for (let k = 0; k < ov.N; k++) Vs += film[k] * ov.area[k];
+  const e1 = near(meshVolume(coatingMesh(ov, film, null)), Vs, 2e-3, 'thick film in an oval bore');
+  // 3) same film outside a round tube (the layer grows outward) and on a flat coupon with an edge bead
+  const tube = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 1, id: 0.6 }, surface: 'outer', grid: { ns: 40, nphi: 32 } });
+  let Vo = 0; for (let k = 0; k < tube.N; k++) Vo += film[k] * tube.area[k];
+  const e2 = near(meshVolume(coatingMesh(tube, film, null)), Vo, 2e-3, 'film outside a tube');
+  const cp = buildGeometry({ geometry: { type: 'coupon', length: 20, width: 6 }, grid: { ns: 40, nphi: 12 } });
+  const fc = new Float64Array(cp.N); let Vc = 0;
+  for (let k = 0; k < cp.N; k++) { const j = k % cp.Nj; fc[k] = j === 0 || j === cp.Nj - 1 ? 90e-6 : 30e-6; Vc += fc[k] * cp.area[k]; }
+  const e3 = near(meshVolume(coatingMesh(cp, fc, null)), Vc, 1e-9, 'coupon film with edge beads');
+  out.push(`film ${(e1 * 100).toFixed(2)}% in bore, ${(e2 * 100).toFixed(2)}% outside, ${(e3 * 100).toFixed(4)}% coupon`);
+  // 4) liquid plug in a straight round bore: concave menisci, volume as given, mean levels at the ends
+  const rb = buildGeometry({ geometry: { type: 'catheter', length: 30, od: 2, id: 1.4 }, surface: 'inner', grid: { ns: 60, nphi: 16 } });
+  const r = 0.7e-3, Vp = Math.PI * r * r * 8e-3, hb = heldBody(rb, { a: 10e-3, b: 18e-3, V: Vp, kind: 'plug' }, { theta: 0.5 });
+  near(hb.V, Vp, 2e-3, 'plug body volume'); near(hb.a, 10e-3, 0.01, 'upper meniscus mean level');
+  near(hb.hmA, (r * (1 - Math.sin(0.5))) / Math.cos(0.5), 1e-9, 'spherical-cap sag');
+  assert(hb.zTop(1) < hb.zTop(0) && hb.zBot(1, 0) > hb.zBot(0, 0), 'both menisci concave: the liquid climbs the wall at each end');
+  // 5) SAICCS cartridge: liquid draining out of the 35° bevelled tip, and the bore filled from the tip
+  const geo = buildGeometry({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });
+  for (const V of [8e-9, 120e-9]) {
+    const top = (() => { let lo = 0, hi = geo.L; for (let it = 0; it < 60; it++) { const m = 0.5 * (lo + hi); let v = 0; for (let i = 0; i < geo.Ni; i++) { const s0 = i * geo.ds, s1 = s0 + geo.ds; v += Math.PI * geo.A[i] * geo.B[i] * Math.max(0, s1 - Math.max(s0, m)); } if (v > V) lo = m; else hi = m; } return 0.5 * (lo + hi); })();
+    const b = heldBody(geo, { a: top, b: geo.L, V, kind: 'plug' }, { theta: 0.6 });
+    near(b.V, V, 3e-3, 'cartridge tip plug volume');
+    assert(b.a < top, 'the bevel scoop holds no liquid, so the plug reaches higher than the full-section estimate');
+    out.push(`${(V * 1e9).toFixed(0)} µL plug top ${(b.top * 1e3).toFixed(2)} mm (full-section ${(top * 1e3).toFixed(2)})`);
+  }
   return out.join('; ');
 });
 

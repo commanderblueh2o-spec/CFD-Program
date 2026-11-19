@@ -690,7 +690,7 @@ STAGES.fill = {
       const frac = (tl - tFill0) / Math.max(F.fillT, 1e-9);
       const target = F.fromStart ? ctx.cumA(geo.L) - frac * F.V : frac * F.V;
       const sLiq = Math.max(0, Math.min(geo.L, ctx.invCumA(target)));
-      markFilled(sLiq);
+      markFilled(sLiq); F.sLiq = sLiq;
       ctx.aux = { nozzle: F.fromStart ? 0.5e-3 : geo.L - 0.5e-3, meniscus: sLiq, filling: 1 };
       return;
     }
@@ -887,12 +887,32 @@ STAGES.dip = {
 };
 
 // ---------------------------------------------------------------- driver
+// Liquid that fills the whole bore cross-section right now (held cells, fs.mask = 1): its volume
+// and the axial extent between its menisci, from the process state (not from the mask), so the
+// drawing can be checked against it. kind: 'fill' (fill stage), 'plug', 'column' (held by
+// capillarity) or 'bath' (lumen below a dip bath's meniscus; bath liquid, not coating on the part).
+export function heldLiquid(ctx) {
+  const { geo } = ctx;
+  if (geo.flat || geo.surface !== 'inner') return null;
+  const seg = (a, b, kind, V) => { const lo = Math.max(0, Math.min(a, b)), hi = Math.min(geo.L, Math.max(a, b)); return { a: lo, b: hi, kind, V: V ?? ctx.cumA(hi) - ctx.cumA(lo) }; };
+  for (const p of [ctx.plug, ctx._plug, ctx._fill && ctx._fill.plug, ctx._dip && ctx._dip.plug]) if (p && !p.done) return seg(p.rear, p.front(), 'plug', p.V);
+  const F = ctx._fill;
+  if (F && ctx.aux && ctx.aux.filling && !F.plug) {
+    const sl = F.phase === 'prime' ? (F.fromStart ? 0 : geo.L) : F.phase === 'fill' ? F.sLiq : F.top;
+    if (sl !== undefined) return F.fromStart ? seg(sl, geo.L, 'fill') : seg(0, sl, 'fill');
+  }
+  if (ctx.aux && ctx.aux.bath != null && ctx._dip && !ctx._dip.plug && ctx.aux.meniscus != null) return seg(ctx.aux.meniscus, geo.L, 'bath');
+  if (ctx.trapped) return seg(ctx.trapped.a, ctx.trapped.b, 'column');
+  return null;
+}
+
 export function frameOf(ctx, stIndex, label) {
   const { fs } = ctx;
+  const held = heldLiquid(ctx);
   return {
     t: fs.t, stage: stIndex, label,
     h: Float32Array.from(fs.h), m: Float32Array.from(fs.m), alpha: Float32Array.from(fs.alpha),
-    mask: Uint8Array.from(fs.mask), T: Float32Array.from(fs.Tf), aux: { ...(ctx.aux || {}), pool: fs.pool ? [fs.pool[0].V, fs.pool[1].V] : [0, 0] },
+    mask: Uint8Array.from(fs.mask), T: Float32Array.from(fs.Tf), aux: { ...(ctx.aux || {}), pool: fs.pool ? [fs.pool[0].V, fs.pool[1].V] : [0, 0], ...(held ? { held } : {}) },
   };
 }
 

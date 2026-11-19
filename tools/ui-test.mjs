@@ -64,5 +64,28 @@ if (poolCheck) {
   await page.evaluate(() => window.coatsimView.tipView()); await page.waitForTimeout(300);
   await page.screenshot({ path: `${out}/6-tip-pool.png` });
 } else console.log('tip pool: none held during this run');
+// Whole coating: at every slider position the liquid drawn at true scale (film layer, tip pool,
+// bore-filling liquid with its menisci) must hold the solver's liquid volume
+const volCheck = await page.evaluate(() => {
+  const el = document.querySelector('#frame'), out = { n: 0, worst: 0, at: null, heldAt: null };
+  const step = Math.max(1, Math.round(Number(el.max) / 300));
+  for (let v = 0; v <= Number(el.max); v += step) {
+    el.value = v; el.dispatchEvent(new Event('input'));
+    const c = window.coatsimView.liquidCheck; if (!c || !(c.expected > 1e-11)) continue;
+    out.n++;
+    const e = (c.drawn - c.expected) / c.expected;
+    if (Math.abs(e) > Math.abs(out.worst)) { out.worst = e; out.at = { v, ...c }; }
+    if (c.heldKind === 'plug' && c.held > 0.05 * c.expected) out.heldAt = v; // last frame with a sizeable plug
+  }
+  return out;
+});
+console.log(`drawn volume: ${volCheck.n} frames, worst ${(volCheck.worst * 100).toFixed(2)}%` + (volCheck.at ? ` (solver ${(volCheck.at.expected * 1e9).toFixed(3)} µL, drawn ${(volCheck.at.drawn * 1e9).toFixed(3)} µL${volCheck.at.heldKind ? ', ' + volCheck.at.heldKind : ''})` : ''));
+if (Math.abs(volCheck.worst) > 0.015) errors.push('drawn coating volume differs from the solver by more than 1.5%');
+if (volCheck.heldAt !== null) {
+  // a plug draining out of the tip: its upper meniscus is drawn curved
+  await page.evaluate((v) => { const el = document.querySelector('#frame'); el.value = v; el.dispatchEvent(new Event('input')); window.coatsimView.tipView(); }, volCheck.heldAt);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${out}/7-plug-meniscus.png` });
+}
 console.log('errors:', errors.length ? errors : 'none');
 await browser.close();

@@ -3,6 +3,7 @@
 // meniscus) drawn as rings.
 
 import { colorAt } from './colormap.js';
+import { coatingMesh, coatPoint } from '../core/drawn.js';
 
 const VS = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss;
@@ -174,19 +175,19 @@ export class View3D {
   }
 
   // geo: serialised geometry; ghost: wall radius offset for the context shell
-  // The render mesh is finer than the simulation grid: the cross-section is drawn from the
-  // exact ellipse with SUB vertices per cell around the circumference, values are blended
-  // between cell centres, the mesh runs to the true ends of the part, and at a bevelled tip
-  // the vertices sit on the cut plane (smooth slanted edge instead of stepped cells).
+  // The render mesh is finer than the simulation grid (coatingMesh in core/drawn.js): the
+  // cross-section is drawn from the exact ellipse with SUB vertices per cell around the
+  // circumference, values are blended between cell centres, rows sit at the cell centres plus
+  // one at each true end of the part, and at a bevelled tip the vertices sit on the cut plane
+  // (smooth slanted edge instead of stepped cells). The same mesh gives the drawn volume.
   setGeometry(geo) {
     this.geo = geo;
-    const { Ni, Nj, flat } = geo;
-    const SUB = flat ? 1 : 4;
-    this.SUB = SUB;
-    const cols = flat ? Nj : Nj * SUB + 1;
-    this.cols = cols;
+    const M0 = coatingMesh(geo, null, null);
+    const { rows, cols, SUB } = M0;
+    this.SUB = SUB; this.cols = cols; this.rows = rows; this.cutS = M0.cutS; this.lastRow = M0.lastRow; this.rowZ = M0.rowZ; this.rowI = M0.rowI;
+    this.M0 = M0;
     const idx = [];
-    for (let i = 0; i < Ni - 1; i++) for (let j = 0; j < cols - 1; j++) {
+    for (let i = 0; i < rows - 1; i++) for (let j = 0; j < cols - 1; j++) {
       const a = i * cols + j, b = a + 1, c = a + cols, d = c + 1;
       idx.push(a, c, b, b, c, d);
     }
@@ -196,35 +197,25 @@ export class View3D {
     // so the whole slanted cut, long side to short side, shows in profile.
     const bvl = geo.bevel && geo.bevel.deg > 0 && geo.surface === 'inner';
     if (bvl) { const cb = (geo.bevel.clockDeg * Math.PI) / 180; this.cutN = [-Math.sin(cb), Math.cos(cb)]; } else this.cutN = [0, 1];
-    // per render column: the bevel cut position and the last existing simulation row
-    const vm = geo.voidMask, ee = geo.edgeEnd;
-    this.cutS = new Float32Array(cols); this.lastRow = new Int32Array(Nj);
-    for (let j = 0; j < Nj; j++) { let r = Ni - 1; while (r > 0 && vm && vm[r * Nj + j]) r--; this.lastRow[j] = r; }
-    const cutAtCell = (j) => (ee ? geo.s[this.lastRow[j]] + ee[this.lastRow[j] * Nj + j] : geo.L);
-    for (let u = 0; u < cols; u++) {
-      if (flat) { this.cutS[u] = geo.L; continue; }
-      const j = Math.floor(u / SUB) % Nj, f = (u % SUB) / SUB, j2 = (j + 1) % Nj;
-      this.cutS[u] = Math.min(geo.L, cutAtCell(j) * (1 - f) + cutAtCell(j2) * f);
-    }
     const gl = this.gl; if (!gl) return;
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
     gl.getExtension('OES_element_index_uint');
     let rmax = 0;
-    for (let i = 0; i < Ni; i++) rmax = Math.max(rmax, geo.A[i], geo.B[i] || 0);
+    for (let i = 0; i < geo.Ni; i++) rmax = Math.max(rmax, geo.A[i], geo.B[i] || 0);
     this.radial = this.radialMode === 'auto' && !geo.flat ? Math.max(1, geo.L / 10 / (2 * rmax)) : 1;
     this.scale = 2.2 / Math.max(geo.L, 2 * rmax * this.radial * 1.2);
     this._camTilt = undefined;
     this.rmax = rmax;
     this.hasGhost = geo.surface === 'inner';
     if (this.hasGhost) {
-      const n = Ni * cols, gp = new Float32Array(3 * n), gn = new Float32Array(3 * n), gc = new Float32Array(3 * n), gcut = new Float32Array(n);
-      const wall = Math.max(0.15 * rmax, 0.2e-3);
+      const n = rows * cols, gp = new Float32Array(3 * n), gn = new Float32Array(3 * n), gc = new Float32Array(3 * n), gcut = new Float32Array(n);
+      const wall = Math.max(0.15 * rmax, 0.2e-3), R = this.radial, W = M0.wall, Nn = M0.nrm;
       this.wallT = wall;
-      for (let i = 0; i < Ni; i++) for (let u = 0; u < cols; u++) {
-        const v = i * cols + u, P = this.vertex(i, u, 0);
-        gp[3 * v] = P.x - P.nx * wall * this.radial; gp[3 * v + 1] = P.y - P.ny * wall * this.radial; gp[3 * v + 2] = P.z;
-        gn[3 * v] = -P.nx; gn[3 * v + 1] = -P.ny; gn[3 * v + 2] = 0;
+      for (let v = 0; v < n; v++) {
+        const nx = Nn[2 * v], ny = Nn[2 * v + 1];
+        gp[3 * v] = (W[3 * v] - nx * wall) * R; gp[3 * v + 1] = (W[3 * v + 1] - ny * wall) * R; gp[3 * v + 2] = W[3 * v + 2];
+        gn[3 * v] = -nx; gn[3 * v + 1] = -ny; gn[3 * v + 2] = 0;
         gc[3 * v] = 0.55; gc[3 * v + 1] = 0.6; gc[3 * v + 2] = 0.68;
         gcut[v] = gp[3 * v] * this.cutN[0] + gp[3 * v + 1] * this.cutN[1]; // signed distance to the cut plane
       }
@@ -232,36 +223,20 @@ export class View3D {
     }
   }
 
-  // Render vertex (row i, render column u) displaced by d along the film normal.
-  vertex(i, u, d) {
-    const geo = this.geo, { Ni, Nj } = geo;
-    let z = i === 0 ? 0 : i === Ni - 1 ? geo.L : geo.s[i];
-    z = Math.min(z, this.cutS[u]);
-    if (geo.flat) {
-      const k = i * Nj + u;
-      return { x: geo.pos[3 * k] + geo.nrm[3 * k] * d, y: geo.pos[3 * k + 1] + geo.nrm[3 * k + 1] * d, z, nx: geo.nrm[3 * k], ny: geo.nrm[3 * k + 1] };
-    }
-    const ph = geo.phi[0] + (u / this.SUB) * ((2 * Math.PI) / Nj);
-    const a = geo.A[i], b = geo.B[i], c = Math.cos(ph), sn = Math.sin(ph);
-    let nx = b * c, ny = a * sn; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
-    if (geo.surface === 'inner') { nx = -nx; ny = -ny; }
-    const R = this.radial;
-    return { x: (a * c + nx * d) * R, y: (b * sn + ny * d) * R, z, nx, ny };
-  }
-
   upload(name, arr) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW); }
 
   // opts: {values, range, cmap, film (m), markers, bare (Uint8), rgb (Float32 3/cell, overrides cmap), gloss (0..1/cell)}
   // The wall is drawn in grey at its true position and the coating as a second surface
-  // standing off it by the film thickness × this.exag (1 = true scale). Flooded cells (`fill`:
-  // full bore, plugs, tip pool) fill the bore to the axis. Where a bore is cut open, caps on
-  // the cut plane show the coating thickness (coloured band) and the wall (grey band).
-  // pool: a tipPoolBody() result (meniscus-shaped liquid body at the tip), drawn as its own mesh.
-  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null, pool = null) {
+  // standing off it by the film thickness × this.exag (1 = true scale). Flooded cells (`fill`)
+  // fill the bore to the axis. Where a bore is cut open, caps on the cut plane show the coating
+  // thickness (coloured band) and the wall (grey band).
+  // bodies: liquid bodies drawn as their own meshes (tipPoolBody: the meniscus-shaped pool at
+  // the tip; heldBody: liquid filling the bore between curved menisci during fill and plugs).
+  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null, bodies = null) {
     const geo = this.geo; if (!geo || !this.gl) return;
-    const { Ni, Nj } = geo, cols = this.cols, n = Ni * cols, SUB = this.SUB, R = this.radial;
+    const { Nj } = geo, cols = this.cols, rows = this.rows, n = rows * cols, R = this.radial;
     const inner = geo.surface === 'inner' && !geo.flat;
-    const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n), gls = new Float32Array(n);
+    const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n);
     const cpos = new Float32Array(3 * n), ccol = new Float32Array(3 * n), ccut = new Float32Array(n), cgl = new Float32Array(n);
     const [lo, hi] = range;
     const ex = this.exag || 0;
@@ -274,57 +249,44 @@ export class View3D {
       cd[k] = film && !(bare && bare[k]) ? film[k] * ex : 0;
       cf[k] = fill && fill[k] ? 1 : 0;
     }
-    // coating surface point for a wall point (body units × R) and a blended thickness
-    const coatPt = (x, y, nx, ny, d, fl) => {
-      if (inner) {
-        const r = Math.hypot(x, y) || 1e-12;
-        const t = fl > 0.5 ? 0.999 : Math.min(0.97, (d * R) / r); // never past the axis
-        return [x * (1 - t), y * (1 - t)];
-      }
-      return [x + nx * d * R, y + ny * d * R];
-    };
+    const M = coatingMesh(geo, cd, cf);
+    const WALL = [0.60, 0.62, 0.66];
+    for (let v = 0; v < n; v++) {
+      const k1 = M.blend[2 * v], k2 = M.blend[2 * v + 1], f = M.bf[v];
+      pos[3 * v] = M.wall[3 * v] * R; pos[3 * v + 1] = M.wall[3 * v + 1] * R; pos[3 * v + 2] = M.wall[3 * v + 2];
+      nrm[3 * v] = M.nrm[2 * v]; nrm[3 * v + 1] = M.nrm[2 * v + 1]; nrm[3 * v + 2] = 0;
+      for (let c = 0; c < 3; c++) col[3 * v + c] = WALL[c];
+      cut[v] = inner ? pos[3 * v] * this.cutN[0] + pos[3 * v + 1] * this.cutN[1] : -1;
+      cpos[3 * v] = M.coat[3 * v] * R; cpos[3 * v + 1] = M.coat[3 * v + 1] * R; cpos[3 * v + 2] = M.coat[3 * v + 2];
+      for (let c = 0; c < 3; c++) ccol[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
+      cgl[v] = cg[k1] * (1 - f) + cg[k2] * f;
+      ccut[v] = inner ? cpos[3 * v] * this.cutN[0] + cpos[3 * v + 1] * this.cutN[1] : -1;
+    }
     const blendAt = (i, jf) => {
       const j = Math.floor(jf) % Nj, f = jf - Math.floor(jf), j2 = (j + 1) % Nj;
       const k1 = Math.min(i, this.lastRow[j]) * Nj + j, k2 = Math.min(i, this.lastRow[j2]) * Nj + j2;
       return { k1, k2, f };
     };
-    const WALL = [0.60, 0.62, 0.66];
-    for (let i = 0; i < Ni; i++) for (let u = 0; u < cols; u++) {
-      const v = i * cols + u;
-      const { k1, k2, f } = geo.flat ? { k1: i * Nj + u, k2: i * Nj + u, f: 0 } : blendAt(i, u / SUB);
-      const d = cd[k1] * (1 - f) + cd[k2] * f, fl = cf[k1] * (1 - f) + cf[k2] * f;
-      const P = this.vertex(i, u, 0);
-      pos[3 * v] = P.x; pos[3 * v + 1] = P.y; pos[3 * v + 2] = P.z;
-      nrm[3 * v] = P.nx; nrm[3 * v + 1] = P.ny; nrm[3 * v + 2] = 0;
-      for (let c = 0; c < 3; c++) col[3 * v + c] = WALL[c];
-      cut[v] = inner ? P.x * this.cutN[0] + P.y * this.cutN[1] : -1;
-      const C = geo.flat ? [P.x + P.nx * d, P.y + P.ny * d] : coatPt(P.x, P.y, P.nx, P.ny, d, fl);
-      cpos[3 * v] = C[0]; cpos[3 * v + 1] = C[1]; cpos[3 * v + 2] = P.z;
-      for (let c = 0; c < 3; c++) ccol[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
-      cgl[v] = cg[k1] * (1 - f) + cg[k2] * f;
-      ccut[v] = inner ? C[0] * this.cutN[0] + C[1] * this.cutN[1] : -1;
-    }
     // caps on the cut plane: two generator lines where the plane meets the bore
     const kp = [], kn = [], kc = [], kg = [];
     if (inner && this.cutaway) {
-      const [n0, n1] = this.cutN, p0 = -n1, p1 = n0, wall = this.wallT || 0;
+      const [n0, n1] = this.cutN, p0 = -n1, p1 = n0, wall = this.wallT || 0, SUB = this.SUB;
       for (const sgn of [1, -1]) {
         let prev = null;
-        for (let i = 0; i < Ni; i++) {
-          const a = geo.A[i], b = geo.B[i];
+        for (let r = 0; r < rows; r++) {
+          const i = this.rowI[r], a = geo.A[i], b = geo.B[i];
           const ph = Math.atan2((sgn * p1) / b, (sgn * p0) / a);
-          const x = a * Math.cos(ph) * R, y = b * Math.sin(ph) * R;
+          const x = a * Math.cos(ph), y = b * Math.sin(ph);
           let nx = b * Math.cos(ph), ny = a * Math.sin(ph); const nl = Math.hypot(nx, ny) || 1; nx = -nx / nl; ny = -ny / nl; // into the bore
           const jf = ((((ph - geo.phi[0]) / (2 * Math.PI)) * Nj) % Nj + Nj) % Nj;
           const { k1, k2, f } = blendAt(i, jf);
           const d = cd[k1] * (1 - f) + cd[k2] * f, fl = cf[k1] * (1 - f) + cf[k2] * f;
           const u = jf * SUB, u0 = Math.floor(u) % cols, u1 = Math.min(cols - 1, u0 + 1), fu = u - Math.floor(u);
-          let z = i === 0 ? 0 : i === Ni - 1 ? geo.L : geo.s[i];
-          z = Math.min(z, this.cutS[u0] * (1 - fu) + this.cutS[u1] * fu);
-          const C = coatPt(x, y, nx, ny, d, fl);
+          const z = Math.min(this.rowZ[r], this.cutS[u0] * (1 - fu) + this.cutS[u1] * fu);
+          const C = coatPoint(x, y, nx, ny, d, fl, true);
           const rgb = [0, 1, 2].map((c) => cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f);
           const gl = cg[k1] * (1 - f) + cg[k2] * f;
-          const row = { W: [x, y, z], C: [C[0], C[1], z], G: [x - nx * wall * R, y - ny * wall * R, z], rgb, gl, thick: d > 0 || fl > 0.5 };
+          const row = { W: [x * R, y * R, z], C: [C[0] * R, C[1] * R, z], G: [(x - nx * wall) * R, (y - ny * wall) * R, z], rgb, gl, thick: d > 0 || fl > 0.5 };
           if (prev) {
             const quad = (A, B, Cq, D, rgbA, rgbB, gA, gB) => { // A,B on row i-1; Cq,D on row i
               for (const [Pq, rq, gq] of [[A, rgbA, gA], [B, rgbA, gA], [Cq, rgbB, gB], [B, rgbA, gA], [D, rgbB, gB], [Cq, rgbB, gB]]) { kp.push(...Pq); kn.push(n0, n1, 0); kc.push(...rq); kg.push(gq); }
@@ -338,8 +300,8 @@ export class View3D {
     }
     // section slice: ring caps at secZ (coating band coloured, wall band grey)
     if (this.secZ != null && !geo.flat) {
-      const z = this.secZ; let i = 0; while (i < Ni - 2 && geo.s[i + 1] < z) i++;
-      const t = Math.max(0, Math.min(1, (z - geo.s[i]) / Math.max(geo.s[i + 1] - geo.s[i], 1e-12)));
+      const z = this.secZ, rz = this.rowZ; let i = 0; while (i < rows - 2 && rz[i + 1] < z) i++;
+      const t = Math.max(0, Math.min(1, (z - rz[i]) / Math.max(rz[i + 1] - rz[i], 1e-12)));
       const wall = this.wallT || 0;
       const at = (u) => { // interpolated wall / coating / outer points and colour at render column u
         const a = i * cols + u, b2 = (i + 1) * cols + u, L3 = (arr, v, c) => arr[3 * v + c];
@@ -360,7 +322,7 @@ export class View3D {
       }
     }
     this.nCap = kp.length / 3;
-    this.buildPool(pool, cc, cg);
+    this.buildBodies(bodies, cc, cg);
     {
       const Mm = this.modelMatrix(), pw = new Float32Array(pos.length);
       for (let v = 0; v < pos.length; v += 3) for (let c = 0; c < 3; c++) pw[v + c] = Mm[c] * cpos[v] + Mm[4 + c] * cpos[v + 1] + Mm[8 + c] * cpos[v + 2] + Mm[12 + c];
@@ -373,65 +335,72 @@ export class View3D {
     this.render();
   }
 
-  // Mesh for the tip pool (see tipPoolBody in core/geometry.js): the meniscus free surface
-  // z(ρ) = s0 − hm ρ², the lower face spanning the opening in the bevel plane, and its section
-  // on the cut-open plane. Built in the unit disc of the local ellipse, so the drawn body
-  // has the computed volume (the radius magnifier scales x and y only).
-  buildPool(pool, cc, cg) {
+  // Meshes for liquid bodies in the bore (tipPoolBody / heldBody in core): an upper free surface
+  // zTop(ρ², u) and a lower one zBot(ρ², u) (a meniscus, or the opening in the bevel plane),
+  // plus their section on the cut-open plane. Built in the unit disc of the local ellipse, so
+  // the drawn body has the computed volume (the radius magnifier scales x and y only).
+  buildBodies(bodies, cc, cg) {
     this.nPool = 0; this.poolInfo = null;
     const geo = this.geo;
-    if (!pool || !geo || geo.flat || geo.surface !== 'inner') return;
+    const list = (Array.isArray(bodies) ? bodies : [bodies]).filter(Boolean);
+    if (!list.length || !geo || geo.flat || geo.surface !== 'inner') return;
     const { Ni, ds, A, B, L } = geo, R = this.radial, [n0, n1] = this.cutN;
-    let rgb = pool.rgb, gloss = pool.gloss ?? 1;
-    if (!rgb) { // mean colour of the cells the body covers
-      rgb = [0, 0, 0]; let c = 0; gloss = 0;
-      for (let k = 0; k < pool.inBody.length; k++) if (pool.inBody[k]) { for (let q = 0; q < 3; q++) rgb[q] += cc[3 * k + q]; gloss += cg[k]; c++; }
-      if (!c) return; rgb = rgb.map((x) => x / c); gloss /= c;
-    }
-    const P = (u, v, s) => { const i = Math.max(0, Math.min(Ni - 1, Math.floor(s / ds))), X = u * pool.dX - v * pool.dY, Y = u * pool.dY + v * pool.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
-    const tp = [], tn = [];
-    const NR = 20, NM = 72;
-    for (const face of ['top', 'bottom']) {
-      const G = [];
-      for (let k = 0; k <= NR; k++) {
-        const row = [], rho = k / NR;
-        for (let m = 0; m <= NM; m++) {
-          const ps = (2 * Math.PI * m) / NM, u = rho * Math.cos(ps), v = rho * Math.sin(ps), sb = pool.sBottom(u);
-          row.push(P(u, v, face === 'top' ? Math.min(pool.zTop(rho * rho), sb) : sb));
+    const tp = [], tn = [], tc = [], tg = [], tcut = [];
+    for (const body of list) {
+      let rgb = body.rgb, gloss = body.gloss ?? 1;
+      if (!rgb && body.inBody) { // mean colour of the cells the body covers
+        rgb = [0, 0, 0]; let c = 0; gloss = 0;
+        for (let k = 0; k < body.inBody.length; k++) if (body.inBody[k]) { for (let q = 0; q < 3; q++) rgb[q] += cc[3 * k + q]; gloss += cg[k]; c++; }
+        if (!c) continue; rgb = rgb.map((x) => x / c); gloss /= c;
+      }
+      if (!rgb) rgb = [0.08, 0.30, 0.80];
+      const zBot = body.zBot || ((r2, u) => body.sBottom(u));
+      const P = (u, v, s) => { const i = Math.max(0, Math.min(Ni - 1, Math.floor(s / ds))), X = u * body.dX - v * body.dY, Y = u * body.dY + v * body.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
+      const n0v = tp.length / 3;
+      const NR = 20, NM = 72;
+      for (const face of ['top', 'bottom']) {
+        const G = [];
+        for (let k = 0; k <= NR; k++) {
+          const row = [], rho = k / NR, r2 = rho * rho;
+          for (let m = 0; m <= NM; m++) {
+            const ps = (2 * Math.PI * m) / NM, u = rho * Math.cos(ps), v = rho * Math.sin(ps), sb = zBot(r2, u);
+            row.push(P(u, v, face === 'top' ? Math.min(body.zTop(r2, u), sb) : sb));
+          }
+          G.push(row);
         }
-        G.push(row);
+        const Nn = G.map((row, k) => row.map((p, m) => {
+          const kk = Math.max(1, k), a = G[Math.min(NR, kk + 1)][m], b = G[kk - 1][m], c = G[kk][(m + 1) % NM], d = G[kk][(m + NM - 1) % NM];
+          const t1 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]], t2 = [c[0] - d[0], c[1] - d[1], c[2] - d[2]];
+          return norm(cross(t1, t2));
+        }));
+        for (let k = 0; k < NR; k++) for (let m = 0; m < NM; m++) {
+          for (const [kk, mm] of [[k, m], [k + 1, m], [k + 1, m + 1], [k, m], [k + 1, m + 1], [k, m + 1]]) { tp.push(...G[kk][mm]); tn.push(...Nn[kk][mm]); }
+        }
       }
-      const N = G.map((row, k) => row.map((p, m) => {
-        const kk = Math.max(1, k), a = G[Math.min(NR, kk + 1)][m], b = G[kk - 1][m], c = G[kk][(m + 1) % NM], d = G[kk][(m + NM - 1) % NM];
-        const t1 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]], t2 = [c[0] - d[0], c[1] - d[1], c[2] - d[2]];
-        return norm(cross(t1, t2));
-      }));
-      for (let k = 0; k < NR; k++) for (let m = 0; m < NM; m++) {
-        for (const [kk, mm] of [[k, m], [k + 1, m], [k + 1, m + 1], [k, m], [k + 1, m + 1], [k, m + 1]]) { tp.push(...G[kk][mm]); tn.push(...N[kk][mm]); }
+      const nSurf = tp.length / 3;
+      // section of the body on the cut-open plane (only when cut open)
+      if (this.cutaway) {
+        const aT = A[Ni - 1], bT = B[Ni - 1], cb = body.cb;
+        let eX = Math.cos(cb) / aT, eY = Math.sin(cb) / bT; const el = Math.hypot(eX, eY) || 1; eX /= el; eY /= el;
+        const NT = 64, NZ = 12, colm = [];
+        for (let q = 0; q <= NT; q++) {
+          const tt = -1 + (2 * q) / NT, X = tt * eX, Y = tt * eY, u = X * body.dX + Y * body.dY, v = -X * body.dY + Y * body.dX, r2 = tt * tt, sb = zBot(r2, u), z = Math.min(body.zTop(r2, u), sb);
+          const c = []; for (let r = 0; r <= NZ; r++) c.push(P(u, v, z + ((sb - z) * r) / NZ)); colm.push(c);
+        }
+        for (let q = 0; q < NT; q++) for (let r = 0; r < NZ; r++) {
+          for (const [qq, rr] of [[q, r], [q + 1, r], [q + 1, r + 1], [q, r], [q + 1, r + 1], [q, r + 1]]) { tp.push(...colm[qq][rr]); tn.push(n0, n1, 0); }
+        }
+      }
+      for (let v = n0v; v < tp.length / 3; v++) {
+        tc.push(rgb[0], rgb[1], rgb[2]); tg.push(gloss);
+        tcut.push(v < nSurf ? tp[3 * v] * n0 + tp[3 * v + 1] * n1 : -1); // the plane section itself is never cut
       }
     }
-    const nSurf = tp.length / 3;
-    // section of the body on the cut-open plane (only when cut open)
-    if (this.cutaway) {
-      const aT = A[Ni - 1], bT = B[Ni - 1], cb = pool.cb;
-      let eX = Math.cos(cb) / aT, eY = Math.sin(cb) / bT; const el = Math.hypot(eX, eY) || 1; eX /= el; eY /= el;
-      const NT = 64, NZ = 12, col = [];
-      for (let q = 0; q <= NT; q++) {
-        const tt = -1 + (2 * q) / NT, X = tt * eX, Y = tt * eY, u = X * pool.dX + Y * pool.dY, v = -X * pool.dY + Y * pool.dX, sb = pool.sBottom(u), z = Math.min(pool.zTop(tt * tt), sb);
-        const c = []; for (let r = 0; r <= NZ; r++) c.push(P(u, v, z + ((sb - z) * r) / NZ)); col.push(c);
-      }
-      for (let q = 0; q < NT; q++) for (let r = 0; r < NZ; r++) {
-        for (const [qq, rr] of [[q, r], [q + 1, r], [q + 1, r + 1], [q, r], [q + 1, r + 1], [q, r + 1]]) { tp.push(...col[qq][rr]); tn.push(n0, n1, 0); }
-      }
-    }
-    const n = tp.length / 3, pcol = new Float32Array(3 * n), pcut = new Float32Array(n), pg = new Float32Array(n).fill(gloss);
-    for (let v = 0; v < n; v++) {
-      for (let q = 0; q < 3; q++) pcol[3 * v + q] = rgb[q];
-      pcut[v] = v < nSurf ? tp[3 * v] * n0 + tp[3 * v + 1] * n1 : -1; // the plane section itself is never cut
-    }
-    this.upload('ppos', new Float32Array(tp)); this.upload('pnrm', new Float32Array(tn)); this.upload('pcol', pcol); this.upload('pcut', pcut); this.upload('pgloss', pg);
+    const n = tp.length / 3; if (!n) return;
+    this.upload('ppos', new Float32Array(tp)); this.upload('pnrm', new Float32Array(tn)); this.upload('pcol', new Float32Array(tc)); this.upload('pcut', new Float32Array(tcut)); this.upload('pgloss', new Float32Array(tg));
     this.nPool = n;
-    this.poolInfo = { V: pool.V, Vpool: pool.Vpool, Vfilm: pool.Vfilm, height: pool.height, hm: pool.hm };
+    const pool = list.find((b) => b.Vpool !== undefined), held = list.find((b) => b.Vheld !== undefined);
+    this.poolInfo = { V: pool ? pool.V : 0, Vpool: pool ? pool.Vpool : 0, Vfilm: pool ? pool.Vfilm : 0, height: pool ? pool.height : 0, hm: pool ? pool.hm : 0, Vheld: held ? held.V : 0, heldKind: held ? held.kind : null };
   }
 
   // Animated process effects: [{kind:'air'|'cross'|'needle'|'spray'|'bath', ...}]
@@ -456,7 +425,8 @@ export class View3D {
     // outline of the bevelled tip opening, so the cut reads even at full-part zoom
     if (geo.bevel && geo.bevel.deg > 0 && !geo.flat) {
       const rim = [];
-      for (let u = 0; u < this.cols; u++) { const P = this.vertex(geo.Ni - 1, u, 0); rim.push([P.x, P.y, P.z]); }
+      const W = this.M0.wall, R = this.radial, r0 = (this.rows - 1) * this.cols;
+      for (let u = 0; u < this.cols; u++) { const v = r0 + u; rim.push([W[3 * v] * R, W[3 * v + 1] * R, W[3 * v + 2]]); }
       const hidden = (P) => this.cutaway && geo.surface === 'inner' && P[0] * this.cutN[0] + P[1] * this.cutN[1] > 1e-9;
       for (let u = 0; u < rim.length - 1; u++) if (!hidden(rim[u]) || !hidden(rim[u + 1])) seg(rim[u], rim[u + 1], [1.0, 0.82, 0.35]);
     }

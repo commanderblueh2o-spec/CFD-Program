@@ -2,6 +2,8 @@ import { test, assert, near, run } from './harness.mjs';
 import { simulate, makeContext } from '../src/core/processes.js';
 import { brethertonFilm, dipFilmOuter, viscosity } from '../src/core/physics.js';
 import { COATINGS } from '../src/core/materials.js';
+import { getPreset } from '../src/core/presets.js';
+import { frameLiquid } from '../src/core/drawn.js';
 
 const oil = { mu0: 0.1, evap0: 0, solids: 1, phiMax: 1, thick: 0, cure: { model: 'none' } };
 
@@ -281,6 +283,25 @@ test('coating draining to a bevelled tip pools there; bevel jets above the capil
   assert(!blown.metrics.defects.some((d) => /pooled at the tip/.test(d.title)), 'strong jets should clear the pool');
   near(held.metrics.massBalance.film_uL + held.metrics.massBalance.dripped_uL, 3, 0.03, 'volume (held)');
   return `${pooled.detail.split(' collected')[0]} held at 5 m/s; cleared at 30 m/s`;
+});
+
+test('3D view draws the simulated liquid volume in every frame (SAICCS fill/withdraw/HACS, lumen dip)', () => {
+  const out = [];
+  for (const id of ['saiccs_ha_heated', 'catheter_lumen_dip']) {
+    const spec = getPreset(id), res = simulate(spec), hp = (spec.precursorUm || 0.05) * 1e-6;
+    let worst = 0, n = 0, kinds = new Set();
+    for (const fr of res.frames) {
+      const L = frameLiquid(res.geometry, fr, hp, 0.5);
+      if (fr.aux.held) kinds.add(fr.aux.held.kind);
+      if (!(L.expected > 1e-12)) continue;
+      n++;
+      const e = (L.drawn - L.expected) / L.expected;
+      if (Math.abs(e) > Math.abs(worst)) worst = e;
+    }
+    assert(Math.abs(worst) < 0.012, `${id}: drawn volume off by ${(worst * 100).toFixed(2)}%`);
+    out.push(`${id} ${n} frames, worst ${(worst * 100).toFixed(2)}% (${[...kinds].join('/')})`);
+  }
+  return out.join('; ');
 });
 
 run();

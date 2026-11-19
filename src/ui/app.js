@@ -1,7 +1,8 @@
 // CoatSim application controller.
 import { PRESETS, getPreset } from '../core/presets.js';
 import { SUBSTRATES, COATINGS, contactAngleOWRK, wenzel, resolveCoating, resolveSubstrate } from '../core/materials.js';
-import { buildGeometry, parseProfileCSV, profileToCSV, tipPoolBody } from '../core/geometry.js';
+import { buildGeometry, parseProfileCSV, profileToCSV } from '../core/geometry.js';
+import { frameLiquid } from '../core/drawn.js';
 import { capillaryLength } from '../core/physics.js';
 import { GEOMETRY_SCHEMAS, STAGE_SCHEMAS, SUBSTRATE_OVERRIDES, FIELDS } from './schema.js';
 import { STAGE_DEFAULTS, withDefaults, defaultTilt } from '../core/processes.js';
@@ -476,32 +477,22 @@ function fieldValues(fr, key) {
 
 // Animation colours: glossy liquid (light → deep blue with thickness) → matte dry film (sand) → cured (amber)
 const C_THIN = [0.62, 0.86, 1.0], C_THICK = [0.10, 0.36, 0.86], C_DRY = [0.90, 0.80, 0.58], C_CURED = [0.82, 0.50, 0.20];
-// Cells where liquid fills the whole bore (fill stage, plugs, bath, tip pool): drawn solid.
-// The tip pool is not flooded cell by cell: it is drawn as its own meniscus body (poolBody).
-function floodedCells(fr) {
-  const res = state.result, geo = res.geometry, n = fr.h.length, out = new Uint8Array(n), pool = fr.aux && fr.aux.pool;
-  for (let k = 0; k < n; k++) {
-    if (fr.mask && fr.mask[k] === 1) { out[k] = 1; continue; }
-    if (pool && pool[0] > 1e-12 && geo.s[Math.floor(k / geo.Nj)] <= geo.poolReach[0]) out[k] = 1;
-  }
-  return geo.surface === 'inner' ? out : null;
-}
-
-// Liquid body held at the tip for a frame: the held pool plus the film it covers, shaped as a
-// meniscus filling up from the long-side point of the bevel (same volume as the solver's pool).
-function poolBody(fr) {
-  const res = state.result, geo = res.geometry, V = fr.aux && fr.aux.pool ? fr.aux.pool[1] : 0;
-  if (!(V > 1e-12) || geo.surface !== 'inner' || geo.flat) return null;
-  if (!res._poolCache) res._poolCache = new Map();
-  if (res._poolCache.has(fr)) return res._poolCache.get(fr);
-  const hp = res._hp, film = new Float64Array(fr.h.length);
-  for (let k = 0; k < film.length; k++) film[k] = fr.mask && fr.mask[k] === 1 ? 0 : Math.max(0, fr.h[k] - hp);
+// What the 3D view draws for a frame (frameLiquid in core/drawn.js): the film layer, the tip
+// pool as a meniscus body with the solver's volume, and liquid filling the bore (fill stage,
+// plugs, held columns) as a body with curved menisci at its true ends, plus the check that the
+// drawn liquid volume matches the solver's bookkeeping.
+function liquidOf(fr) {
+  const res = state.result, geo = res.geometry;
+  if (!res._liqCache) res._liqCache = new Map();
+  if (res._liqCache.has(fr)) return res._liqCache.get(fr);
   // contact angle at the tip (mean over the last row)
   let th = 0, c = 0; for (let j = 0; j < geo.Nj; j++) { const k = (geo.Ni - 1) * geo.Nj + j; if (res.theta && !geo.voidMask[k]) { th += res.theta[k]; c++; } }
-  const body = tipPoolBody(geo, V, film, { theta: c ? th / c : 0.5 });
-  res._poolCache.set(fr, body);
-  return body;
+  const liq = frameLiquid(geo, fr, res._hp, c ? th / c : 0.5);
+  res._liqCache.set(fr, liq);
+  return liq;
 }
+function poolBody(fr) { return liquidOf(fr).body; }
+const HELD_TEXT = { fill: 'Bore filled', plug: 'Liquid plug', column: 'Liquid column held by capillarity', bath: 'Lumen below the bath meniscus' };
 
 function stateColors(fr) {
   const res = state.result, c = res._coat, n = fr.h.length, hp = res._hp;
@@ -642,20 +633,22 @@ function updateViews() {
   view3d.secZ = sec > 0 ? (sec / 100) * res.geometry.L * 0.995 : null;
   $('#sectionVal').textContent = sec > 0 ? `${fmt((sec / 100) * Lmm * 0.995, 3)} mm` : 'off';
   view3d.tilt = st ? st.tilt ?? defaultTilt(st.type, res.spec.geometry) : (res.spec.stages[0]?.tilt ?? defaultTilt(res.spec.stages[0]?.type, res.spec.geometry));
-  const body = poolBody(fr);
+  const liq = liquidOf(fr), body = liq.body;
   let bare = null;
   if (!['theta', 'temp', 'diff'].includes(state.field)) { bare = new Uint8Array(film.length); for (let k = 0; k < film.length; k++) bare[k] = fr.h[k] <= 4 * hp && !(fr.mask && fr.mask[k] === 1) && !(body && body.inBody[k]) ? 1 : 0; }
   const act = activityOf(fr, st);
-  const fill = floodedCells(fr);
-  const pb = body && state.field === 'state' ? { ...body, rgb: [0.08, 0.30, 0.80], gloss: 1 } : body;
-  if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, film, marks, bare, sc.rgb, sc.gloss, fill, pb); }
-  else if (state.field === 'diff') view3d.setField(vals, range, 'diverge', film, marks, null, diffColors(vals, range[1]), null, fill, pb);
-  else view3d.setField(vals, range, state.cmap, film, marks, bare, null, null, fill, pb);
+  const fill = liq.fill, dfilm = liq.film;
+  const LIQ = { rgb: [0.08, 0.30, 0.80], gloss: 1 };
+  const pb = [body && state.field === 'state' ? { ...body, ...LIQ } : body, liq.held ? { ...liq.held, ...LIQ } : null];
+  if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, dfilm, marks, bare, sc.rgb, sc.gloss, fill, pb); }
+  else if (state.field === 'diff') view3d.setField(vals, range, 'diverge', dfilm, marks, null, diffColors(vals, range[1]), null, fill, pb);
+  else view3d.setField(vals, range, state.cmap, dfilm, marks, bare, null, null, fill, pb);
+  view3d.liquidCheck = { expected: liq.expected, drawn: liq.drawn, held: liq.held ? liq.held.Vheld : 0, heldKind: liq.held ? liq.held.kind : null };
   view3d.setEffects(state.tab === 'v3d' ? act.fx : []);
   $('#v3d').className = 'view' + (state.tab === 'v3d' ? ' active' : '') + (act.bg ? ' ' + act.bg : '');
   let Tm = 0; for (const v of fr.T) Tm += v; Tm = Tm / fr.T.length - 273.15;
   $('#ovl3d').innerHTML = `<div class="ov-stage" style="border-color:${st ? res._stageColor(fr.stage) : '#888'}">${esc(fr.label.replace(/ \(end\)$/, ''))}</div>`
-    + `<div>${esc(act.text)}</div>${body && body.Vpool > 1e-11 ? `<div>Pool held at the tip: ${fmt(body.Vpool * 1e9, 2)} µL${body.Vfilm > 0.02 * body.Vpool ? ` (+${fmt(body.Vfilm * 1e9, 2)} µL of film it covers)` : ''}, ${fmt(body.height * 1e3, 2)} mm up from the bevel point</div>` : ''}<div class="muted">t = ${fmtTime(fr.t)} · part ${Tm.toFixed(0)} °C</div>`
+    + `<div>${esc(act.text)}</div>${body && body.Vpool > 1e-11 ? `<div>Pool held at the tip: ${fmt(body.Vpool * 1e9, 2)} µL${body.Vfilm > 0.02 * body.Vpool ? ` (+${fmt(body.Vfilm * 1e9, 2)} µL of film it covers)` : ''}, ${fmt(body.height * 1e3, 2)} mm up from the bevel point</div>` : ''}${liq.held ? `<div>${HELD_TEXT[liq.held.kind] || 'Liquid fills the bore'}: ${fmt(liq.held.Vheld * 1e9, 3)} µL from ${fmt(liq.held.top * 1e3, 3)} to ${fmt(Math.min(liq.held.b, res.geometry.L) * 1e3, 3)} mm</div>` : ''}${liq.expected > 1e-12 ? `<div class="muted" id="liqCheck">Liquid on the part ${fmt(liq.expected * 1e9, 3)} µL · drawn at true scale ${fmt(liq.drawn * 1e9, 3)} µL</div>` : ''}<div class="muted">t = ${fmtTime(fr.t)} · part ${Tm.toFixed(0)} °C</div>`
     + (view3d.radial > 1.01 ? `<div class="muted">Radius drawn ×${fmt(view3d.radial)} for visibility</div>` : '')
     + (view3d.secZ != null ? `<div class="muted">Section at ${fmt(view3d.secZ * 1e3, 3)} mm from the proximal end</div>` : '')
     + (state.field !== 'diff' && view3d.exag >= 1.5 ? `<div class="muted">Coating drawn ×${fmt(view3d.exag, 2)} thicker than true scale</div>` : '');
