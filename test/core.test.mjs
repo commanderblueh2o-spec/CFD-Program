@@ -2,6 +2,7 @@ import { test, assert, near, run } from './harness.mjs';
 import { PentaSolver, solveDense } from '../src/core/linalg.js';
 import { buildGeometry, parseProfileCSV, profileToCSV, tipPoolBody } from '../src/core/geometry.js';
 import { getPreset } from '../src/core/presets.js';
+import { makeContext } from '../src/core/processes.js';
 import { FilmSolver } from '../src/core/film.js';
 import { coatingMesh, meshVolume, heldBody } from '../src/core/drawn.js';
 import { diffSpecs, resampleField, diffStats } from '../src/core/compare.js';
@@ -302,14 +303,36 @@ test('drawn coating volume: film layer, full bore and held liquid bodies hold th
   assert(hb.zTop(1) < hb.zTop(0) && hb.zBot(1, 0) > hb.zBot(0, 0), 'both menisci concave: the liquid climbs the wall at each end');
   // 5) SAICCS cartridge: liquid draining out of the 35° bevelled tip, and the bore filled from the tip
   const geo = buildGeometry({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });
+  const cx = makeContext({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });
   for (const V of [8e-9, 120e-9]) {
     const top = (() => { let lo = 0, hi = geo.L; for (let it = 0; it < 60; it++) { const m = 0.5 * (lo + hi); let v = 0; for (let i = 0; i < geo.Ni; i++) { const s0 = i * geo.ds, s1 = s0 + geo.ds; v += Math.PI * geo.A[i] * geo.B[i] * Math.max(0, s1 - Math.max(s0, m)); } if (v > V) lo = m; else hi = m; } return 0.5 * (lo + hi); })();
-    const b = heldBody(geo, { a: top, b: geo.L, V, kind: 'plug' }, { theta: 0.6 });
+    const sSolver = cx.invCumA(cx.cumA(cx.L) - V); // the solver's (bevel-aware) meniscus level
+    const b = heldBody(geo, { a: sSolver, b: geo.L, V, kind: 'plug' }, { theta: 0.6 });
     near(b.V, V, 3e-3, 'cartridge tip plug volume');
-    assert(b.a < top, 'the bevel scoop holds no liquid, so the plug reaches higher than the full-section estimate');
-    out.push(`${(V * 1e9).toFixed(0)} µL plug top ${(b.top * 1e3).toFixed(2)} mm (full-section ${(top * 1e3).toFixed(2)})`);
+    assert(sSolver < top, 'the bevel scoop holds no liquid, so the plug reaches higher than the full-section estimate');
+    assert(Math.abs(b.a - sSolver) < 0.03e-3, `drawn meniscus ${(b.a * 1e3).toFixed(3)} mm at the solver's ${(sSolver * 1e3).toFixed(3)} mm`);
+    out.push(`${(V * 1e9).toFixed(0)} µL plug: solver meniscus ${(sSolver * 1e3).toFixed(2)} mm, drawn ${(b.a * 1e3).toFixed(2)} mm (full-section ${(top * 1e3).toFixed(2)})`);
   }
   return out.join('; ');
+});
+
+test('bevel: liquid-holding section of the bevelled rows is the uncut circular segment', () => {
+  // round bore r = 0.7 mm, 35° bevel (face to axis): the cut is 2r·tan55° long and, by symmetry,
+  // the bevelled length holds exactly half its full volume, πr²·r·tan55°
+  const r = 0.7e-3, g = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2, id: 1.4, tipBevelDeg: 35 }, surface: 'inner', grid: { ns: 200, nphi: 32 } });
+  const tanB = Math.tan((55 * Math.PI) / 180), cut = 2 * r * tanB;
+  let Vh = 0, Vf = 0;
+  for (let i = 0; i < g.Ni; i++) if (g.L - (i + 1) * g.ds < cut) { Vh += g.holdArea[i] * g.ds; Vf += g.crossArea[i] * g.ds; }
+  const Vrow = Vf - Math.PI * r * r * cut; // full-section part of the row that straddles the top of the cut
+  const e = near(Vh - Vrow, Math.PI * r * r * r * tanB, 2e-3, 'bevel holds half the cut length');
+  assert(g.holdArea[g.Ni - 1] < 0.02 * g.crossArea[g.Ni - 1] && g.holdArea[0] === g.crossArea[0], 'empty at the point, full above the cut');
+  // mid-cut row: the plane passes through the axis, half the section is left
+  const iMid = Math.round((g.L - r * tanB) / g.ds - 0.5), fMid = g.holdArea[iMid] / g.crossArea[iMid];
+  assert(Math.abs(fMid - 0.5) < 0.035, `half section at mid-cut (got ${fMid.toFixed(3)})`); // within half a row of the axis
+  // square end: unchanged
+  const sq = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2, id: 1.4 }, surface: 'inner', grid: { ns: 40, nphi: 16 } });
+  assert(sq.holdArea.every((v, i) => v === sq.crossArea[i]), 'square end holds the full section');
+  return `bevelled length holds ${((Vh - Vrow) * 1e9).toFixed(3)} µL of ${((Vf - Vrow) * 1e9).toFixed(3)} µL (error ${(e * 100).toFixed(2)}%)`;
 });
 
 run();

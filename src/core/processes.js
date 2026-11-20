@@ -73,9 +73,11 @@ export function makeContext(spec) {
   const fs = new FilmSolver(geo, coat, { precursor: (spec.precursorUm || 0.05) * 1e-6, tauHeat: spec.heatUpSeconds || 30 });
   const ctx = { spec, geo, coat, sub, fs, act: new Float64Array(geo.N), holdHours: 0 };
   // cumulative cross-section area along the lumen (for plug kinematics)
-  const { Ni, ds, crossArea } = geo;
+  // (the bevelled rows only count the uncut part of the section, `holdArea`, which is what the
+  // drawn liquid bodies hold too)
+  const { Ni, ds, crossArea } = geo, holdArea = geo.holdArea || crossArea;
   const edges = new Float64Array(Ni + 1);
-  for (let i = 0; i < Ni; i++) edges[i + 1] = edges[i] + crossArea[i] * ds;
+  for (let i = 0; i < Ni; i++) edges[i + 1] = edges[i] + holdArea[i] * ds;
   ctx.L = geo.L;
   ctx.cumA = (s) => {
     const x = Math.max(0, Math.min(geo.L, s)) / ds;
@@ -87,7 +89,7 @@ export function makeContext(spec) {
     if (v >= edges[Ni]) return geo.L + (v - edges[Ni]) / Math.max(crossArea[Ni - 1], 1e-12);
     let lo = 0, hi = Ni;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (edges[mid] <= v) lo = mid; else hi = mid; }
-    return (lo + (v - edges[lo]) / (edges[lo + 1] - edges[lo])) * ds;
+    return (lo + (v - edges[lo]) / Math.max(edges[lo + 1] - edges[lo], 1e-30)) * ds;
   };
   ctx.iOf = (s) => Math.max(0, Math.min(Ni - 1, Math.floor(s / ds)));
   updateWetting(ctx);
@@ -580,7 +582,10 @@ function plugStep(ctx, plug, dt, drive) {
   const pcFront = frontInside ? (2 * gamma * cth) / geo.rHyd[ctx.iOf(sf)] : 0;
   const dP = drive(plug, hi - lo) - pcRear + pcFront;
   // a positive-displacement (peristaltic) pump sets the flow: the meniscus speed is Q / A(s)
-  let U0 = plug.flowQ > 0 ? plug.flowQ / geo.crossArea[iR] : dP > 0 ? dP / Rv / geo.crossArea[iR] : 0;
+  // (in the bevelled rows only the uncut part of the section is filled; floored so a meniscus
+  // at the very point of the bevel cannot jump)
+  const Am = Math.max((geo.holdArea || geo.crossArea)[iR], 0.1 * geo.crossArea[iR]);
+  let U0 = plug.flowQ > 0 ? plug.flowQ / Am : dP > 0 ? dP / Rv / Am : 0;
   if (U0 < 1e-7) { plug.stuck = true; plug.speed = 0; } // balanced by capillarity (creeping < 0.1 µm/s)
   else {
     plug.stuck = false;

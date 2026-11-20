@@ -160,12 +160,27 @@ export function buildGeometry(spec) {
       if (edgeEnd[k] < 0) voidMask[k] = 1;
     }
   }
+  // Liquid-holding cross-section of each row: the bevel cuts away the part of the section
+  // with normalised chord coordinate u = q/qmax < u0(s) = 1 − (L − s)/(qmax tanβ), so only the
+  // circular-segment fraction (acos u0 − u0√(1 − u0²))/π of the (affinely mapped) ellipse can
+  // hold a plug or fill. Averaged over the row; crossArea (the full section) stays the air path.
+  const holdArea = Float64Array.from(crossArea);
+  if (bev > 0 && qmax > 0) {
+    const tanB = Math.tan(Math.min(bev, 1.4)), cutLen = 2 * qmax * tanB, nSub = 32;
+    const seg = (u0) => (u0 <= -1 ? 1 : u0 >= 1 ? 0 : (Math.acos(u0) - u0 * Math.sqrt(1 - u0 * u0)) / Math.PI);
+    for (let i = 0; i < Ni; i++) {
+      if (Lm - (i + 1) * ds >= cutLen) continue;
+      let f = 0;
+      for (let m = 0; m < nSub; m++) f += seg(1 - (Lm - (i + (m + 0.5) / nSub) * ds) / (qmax * tanB));
+      holdArea[i] = crossArea[i] * (f / nSub);
+    }
+  }
   // last existing cell of each generator line (where liquid leaves the tip)
   const endCell = new Int32Array(Nj);
   for (let j = 0; j < Nj; j++) { let ii = Ni - 1; while (ii > 0 && voidMask[ii * Nj + j]) ii--; endCell[j] = ii; }
   return {
     spec, surface: surf, flat, periodic: !flat, Ni, Nj, N, ds, dphi, L: Lm, s, phi, A, B,
-    w, area, kc, nrm, es, ep, pos, crossArea, perim, rHyd, voidMask, edgeEnd, endCell, hasVoid: voidMask.some((v) => v),
+    w, area, kc, nrm, es, ep, pos, crossArea, holdArea, perim, rHyd, voidMask, edgeEnd, endCell, hasVoid: voidMask.some((v) => v),
     bevel: { deg: (bev * 180) / Math.PI, faceDeg: bevAxis, clockDeg: (cb * 180) / Math.PI, qmax },
   };
 }

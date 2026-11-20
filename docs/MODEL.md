@@ -10,6 +10,8 @@ The part has a straight axis *s* ∈ [0, L] and an elliptical cross-section with
 
 The flat coupon uses a rectangular, non-periodic grid.
 
+At a bevelled tip (face at angle α to the axis, β = 90° − α from square) the cut removes the part of each section with normalised chord coordinate u < u₀(s) = 1 − (L − s)/(q_max tan β). The bulk-liquid bookkeeping (plugs, fill, held columns: the cumulative volume V(s) = ∫A_hold ds that places their menisci) uses the liquid-holding area A_hold = πab · (acos u₀ − u₀√(1 − u₀²))/π, averaged over each row, so the bevelled length holds exactly half its full-section volume. Air speeds and hydraulic radii keep the full section, since air leaves through the open side of the bevel.
+
 ## 2. Film equation
 ```
 ∂h/∂t + ∇·q = S − E
