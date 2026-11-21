@@ -131,7 +131,8 @@ export function meshVolume(M, perRow = null) {
 // a flat end at c); hm is the spherical-cap sag r(1 − sin θ)/cos θ at that end. An end at the
 // proximal opening is flat; an end at the tip spans the opening in the bevel plane. The upper
 // end is then placed so the drawn body holds exactly V (bisection), so the bevel scoop and the
-// taper are accounted for. Returns the same shape interface as tipPoolBody (zTop/zBot in the
+// taper are accounted for. Close to the proximal opening the meniscus would climb above it, so
+// its contact line pins at the rim and only the centre dips (still holding V). Returns the same shape interface as tipPoolBody (zTop/zBot in the
 // unit disc of the local ellipse) plus V (drawn volume) and Vheld.
 export function heldBody(geo, held, opts = {}) {
   if (!geo || geo.flat || geo.surface !== 'inner' || !held || !(held.V > 0)) return null;
@@ -148,7 +149,7 @@ export function heldBody(geo, held, opts = {}) {
   const rAt = (s) => { const i = Math.max(0, Math.min(Ni - 1, Math.floor(s / ds))); return Math.min(A[i], B[i]); };
   const th = Math.min(Math.max(opts.theta ?? 0.5, 0), 1.45), sag = (s) => (rAt(s) * (1 - Math.sin(th))) / Math.cos(th);
   const eps = 0.5 * ds;
-  const atTop = held.a <= eps, atTip = held.b >= L - eps;
+  const atTop = held.a <= 1e-3 * eps, atTip = held.b >= L - eps;
   const len = Math.max(held.b - held.a, 1e-9);
   // meniscus depth at each free end, never more than a third of the body length
   const hmB = atTip ? 0 : Math.min(sag(held.b), len / 3);
@@ -174,7 +175,10 @@ export function heldBody(geo, held, opts = {}) {
     let lo = -L, hi = held.b;
     for (let it = 0; it < 60; it++) { const mid = 0.5 * (lo + hi); if (vol(mid, hmA) > held.V) lo = mid; else hi = mid; }
     c = 0.5 * (lo + hi);
-    if (c < 0) { c = 0; hmA = 0; } // the liquid reaches the proximal opening
+    // Near the proximal opening the contact line pins at the rim (zTop is clamped at 0) and only
+    // the centre of the meniscus dips, so c may lie above the opening. The surface is flat at the
+    // opening only when the liquid fills the bore right up to it.
+    if (c <= -hmA / 2) { c = 0; hmA = 0; }
   }
   const zTopF = (r2) => Math.max(0, c + hmA * (0.5 - r2));
   return {

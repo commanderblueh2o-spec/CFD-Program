@@ -301,6 +301,14 @@ test('drawn coating volume: film layer, full bore and held liquid bodies hold th
   near(hb.V, Vp, 2e-3, 'plug body volume'); near(hb.a, 10e-3, 0.01, 'upper meniscus mean level');
   near(hb.hmA, (r * (1 - Math.sin(0.5))) / Math.cos(0.5), 1e-9, 'spherical-cap sag');
   assert(hb.zTop(1) < hb.zTop(0) && hb.zBot(1, 0) > hb.zBot(0, 0), 'both menisci concave: the liquid climbs the wall at each end');
+  // 4b) bore filled to just below the proximal opening (well-wetting coating, θ = 1°): the meniscus
+  // would climb above the opening, so it pins at the rim and only the centre dips; the volume is
+  // still exact (before, the end was drawn flat at the opening, up to 1% too much liquid)
+  for (const a0 of [0.1e-3, 0.25e-3]) {
+    const Vf = Math.PI * r * r * (30e-3 - a0), hf = heldBody(rb, { a: a0, b: 30e-3, V: Vf, kind: 'fill' }, { theta: (1 * Math.PI) / 180 });
+    near(hf.V, Vf, 2e-3, `fill ${a0 * 1e3} mm below the opening`);
+    assert(hf.hmA > 0 && hf.zTop(1) === 0 && hf.zTop(0) > a0, 'contact line pinned at the rim, centre dipped below the mean level');
+  }
   // 5) SAICCS cartridge: liquid draining out of the 35° bevelled tip, and the bore filled from the tip
   const geo = buildGeometry({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });
   const cx = makeContext({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });

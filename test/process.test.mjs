@@ -290,8 +290,12 @@ test('3D view draws the simulated liquid volume in every frame (SAICCS fill/with
   for (const id of ['saiccs_ha_heated', 'catheter_lumen_dip']) {
     const spec = getPreset(id), res = simulate(spec), hp = (spec.precursorUm || 0.05) * 1e-6;
     let worst = 0, n = 0, kinds = new Set();
-    for (const fr of res.frames) {
-      const L = frameLiquid(res.geometry, fr, hp, 0.5);
+    // the view draws the menisci with the run's contact angle at the tip (near 0° for HA on
+    // plasma-treated PP, so the meniscus is deep and pins at the proximal rim when the bore is full)
+    const g = res.geometry; let th = 0, c = 0;
+    for (let j = 0; j < g.Nj; j++) { const k = (g.Ni - 1) * g.Nj + j; if (!g.voidMask[k]) { th += res.theta[k]; c++; } }
+    for (const theta of [0.5, c ? th / c : 0.5]) for (const fr of res.frames) {
+      const L = frameLiquid(res.geometry, fr, hp, theta);
       if (fr.aux.held) kinds.add(fr.aux.held.kind);
       if (!(L.expected > 1e-12)) continue;
       n++;
