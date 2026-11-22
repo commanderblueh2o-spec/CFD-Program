@@ -47,14 +47,23 @@ export class FilmSolver {
     this.gn = new Float64Array(N); this.gs = new Float64Array(N); this.gp = new Float64Array(N);
     this.delta = new Float64Array(N);
     this.uS = new Float64Array(N); this.uP = new Float64Array(N); // linearised advective face velocities x face width
+    // liquid volume through each face per step (s-face k → k+Nj, phi-face k → next j): explicit
+    // flux and the implicit correction, so the solids can move with the liquid that actually moved
+    this.FsE = new Float64Array(N); this.FpE = new Float64Array(N);
+    this.VsT = new Float64Array(N); this.VpT = new Float64Array(N);
+    this.phiO = new Float64Array(N); this.sOut = new Float64Array(N); this.dM = new Float64Array(N);
     this.solverS = new PentaSolver(geo.Ni);
+    // axial row lengths and centre-to-centre distances (rows may be refined toward the tip)
+    this.dsR = geo.dsR || new Float64Array(geo.Ni).fill(geo.ds);
+    this.dC = new Float64Array(Math.max(1, geo.Ni - 1));
+    for (let i = 0; i < geo.Ni - 1; i++) this.dC[i] = geo.uniform ? geo.ds : geo.s[i + 1] - geo.s[i];
     this.solverP = new PentaSolver(geo.Nj);
     const nmax = Math.max(geo.Ni, geo.Nj);
     this.la = new Float64Array(nmax); this.lb = new Float64Array(nmax); this.lc = new Float64Array(nmax);
     this.ld = new Float64Array(nmax); this.le = new Float64Array(nmax); this.lr = new Float64Array(nmax);
     this.dt = 1e-4;
     this.t = 0;
-    this.stats = { deposited: 0, evaporated: 0, dripped: 0, bathExchange: 0, steps: 0, rejected: 0, clipped: 0 };
+    this.stats = { deposited: 0, evaporated: 0, dripped: 0, bathExchange: 0, steps: 0, rejected: 0, clipped: 0, solidsClipGain: 0, solidsClipLoss: 0 };
     this.dripEnabled = opts.drip !== false;
     this.voidList = [];
     if (geo.voidMask) for (let k = 0; k < N; k++) if (geo.voidMask[k]) this.voidList.push(k);
@@ -102,7 +111,8 @@ export class FilmSolver {
 
   // Compute viscosity, mobility, pressure and the explicit rate R = -div q + S.
   _rates() {
-    const geo = this.geo, { Ni, Nj, ds, w, area, kc, periodic } = geo;
+    const geo = this.geo, { Ni, Nj, w, area, kc, periodic } = geo;
+    const dsR = this.dsR, dC = this.dC;
     const h = this.h, m = this.m, mu = this.mu, M = this.M, p = this.p, R = this.R, Rm = this.Rm, D = this.D;
     const c = this.coat, gam = this.gamma, rho = this.rho, hp = this.hp, Tf = this.Tf;
     const N = geo.N;
@@ -119,12 +129,12 @@ export class FilmSolver {
         const k = i * Nj + j;
         let lap = 0;
         const V = this.isVoid;
-        if (i > 0 && !V[k - Nj]) lap += 0.5 * (w[k] + w[k - Nj]) * (h[k - Nj] - h[k]) / ds;
-        if (i < Ni - 1 && !V[k + Nj]) lap += 0.5 * (w[k] + w[k + Nj]) * (h[k + Nj] - h[k]) / ds;
+        if (i > 0 && !V[k - Nj]) lap += 0.5 * (w[k] + w[k - Nj]) * (h[k - Nj] - h[k]) / dC[i - 1];
+        if (i < Ni - 1 && !V[k + Nj]) lap += 0.5 * (w[k] + w[k + Nj]) * (h[k + Nj] - h[k]) / dC[i];
         const jm = j > 0 ? k - 1 : (periodic ? k + Nj - 1 : -1);
         const jp = j < Nj - 1 ? k + 1 : (periodic ? k - Nj + 1 : -1);
-        if (jm >= 0 && !V[jm]) lap += ds * (h[jm] - h[k]) / (0.5 * (w[k] + w[jm]));
-        if (jp >= 0 && !V[jp]) lap += ds * (h[jp] - h[k]) / (0.5 * (w[k] + w[jp]));
+        if (jm >= 0 && !V[jm]) lap += dsR[i] * (h[jm] - h[k]) / (0.5 * (w[k] + w[jm]));
+        if (jp >= 0 && !V[jp]) lap += dsR[i] * (h[jp] - h[k]) / (0.5 * (w[k] + w[jp]));
         lap /= area[k];
         const [Pi, dPi] = disjoining(this.Bd[k], hp, h[k]);
         p[k] = -gam * (lap + kc[k] * kc[k] * h[k]) - Pi - rho * this.gn[k] * h[k];
@@ -132,6 +142,8 @@ export class FilmSolver {
       }
     }
     R.fill(0); Rm.fill(0);
+    const FsE = this.FsE, FpE = this.FpE;
+    FsE.fill(0); FpE.fill(0);
     const addFlux = (kL, kR, F) => {
       // F = volumetric flux from L to R [m^3/s]
       R[kL] -= F; R[kR] += F;
@@ -151,12 +163,12 @@ export class FilmSolver {
         const tau = 0.5 * (this.tauS[kL] + this.tauS[kR]);
         const kup = tau > 0 ? kL : kR;
         const Ms = (h[kup] * h[kup]) / (2 * mu[kup]);
-        const q = -Mf * (p[kR] - p[kL]) / ds + Mg * rho * gsf + Ms * tau;
+        const q = -Mf * (p[kR] - p[kL]) / dC[i] + Mg * rho * gsf + Ms * tau;
         const ua = (rho * gsf * h[gsf > 0 ? kL : kR] ** 2) / mu[gsf > 0 ? kL : kR] + (tau * h[kup]) / mu[kup];
         this.uS[kL] = ua * wf;
         const v = Math.abs(Mg * rho * gsf + Ms * tau) / h[kup];
         if (v > vmax) vmax = v;
-        addFlux(kL, kR, q * wf);
+        addFlux(kL, kR, q * wf); FsE[kL] = q * wf;
       }
     }
     // phi-faces
@@ -174,10 +186,10 @@ export class FilmSolver {
         const Ms = (h[kup] * h[kup]) / (2 * mu[kup]);
         const q = -Mf * (p[kR] - p[kL]) / dist + Mg * rho * gpf + Ms * tau;
         const ua = (rho * gpf * h[gpf > 0 ? kL : kR] ** 2) / mu[gpf > 0 ? kL : kR] + (tau * h[kup]) / mu[kup];
-        this.uP[kL] = ua * ds;
+        this.uP[kL] = ua * dsR[i];
         const v = Math.abs(Mg * rho * gpf + Ms * tau) / h[kup];
         if (v > vmax) vmax = v;
-        addFlux(kL, kR, q * ds);
+        addFlux(kL, kR, q * dsR[i]); FpE[kL] = q * dsR[i];
       }
     }
     let inflow = 0;
@@ -196,12 +208,11 @@ export class FilmSolver {
     const a = this.la, b = this.lb, c = this.lc, d = this.ld, e = this.le;
     const gam = this.gamma, dt = this.dt;
     a.fill(0, 0, n); b.fill(0, 0, n); c.fill(0, 0, n); d.fill(0, 0, n); e.fill(0, 0, n);
-    const wrap = (k) => (periodic ? (k + n) % n : k);
     const has = (f) => periodic || (f >= 0 && f < n - 1);
     // P_k = sum_{o=-1..1} pc(k,o) x_{k+o}
     const pc = (k, o) => {
       const fl = k - 1, fr = k; // left face index (k-1|k), right face (k|k+1)
-      const clL = has(fl) ? cl[wrap(fl)] : 0, clR = has(fr) ? cl[wrap(fr)] : 0;
+      const clL = has(fl) ? cl[periodic ? (fl + n) % n : fl] : 0, clR = has(fr) ? cl[periodic ? (fr + n) % n : fr] : 0;
       if (o === -1) return (-gam / Aa[k]) * clL;
       if (o === 1) return (-gam / Aa[k]) * clR;
       return (gam / Aa[k]) * (clL + clR);
@@ -222,14 +233,14 @@ export class FilmSolver {
       for (let side = -1; side <= 1; side += 2) {
         const f = side === 1 ? k : k - 1;
         if (!has(f)) continue;
-        const fi = wrap(f);
-        const kn = wrap(k + side);
+        const fi = periodic ? (f + n) % n : f;
+        const kn = periodic ? (k + side + n) % n : k + side;
         const s = -dt / Aa[k];
         const g1 = gm[fi], g2 = gd[fi];
         for (let o = -1; o <= 1; o++) {
-          const col = periodic ? wrap(kn + o) : kn + o;
+          const col = periodic ? (kn + o + n) % n : kn + o;
           if (col >= 0 && col < n) add(k, col, s * g1 * pc(kn, o));
-          const col2 = periodic ? wrap(k + o) : k + o;
+          const col2 = periodic ? (k + o + n) % n : k + o;
           if (col2 >= 0 && col2 < n) add(k, col2, -s * g1 * pc(k, o));
         }
         add(k, kn, s * g2);
@@ -245,9 +256,90 @@ export class FilmSolver {
     if (periodic) solver.solveCyclic(a, b, c, d, e, r); else solver.solve(a, b, c, d, e, r);
   }
 
+  // Volume the implicit correction r (the solution of _lineSolve) moved through each face of the
+  // line during the step (face f: from f toward f+1), from the same face terms as the matrix rows.
+  _lineFlux(n, periodic, cl, gm, gd, ua, Aa, r, fo) {
+    const gam = this.gamma, dt = this.dt;
+    // inflow into cell f through its right face is gm (P_f+1 − P_f) + gd (x_f+1 − x_f) + upwind
+    // advection; row f of the matrix adds dt × that / A_f, so dt × (−inflow) left through the face
+    // P_k = (γ/A_k) [clL (x_k − x_k−1) + clR (x_k − x_k+1)], as pc() builds it
+    const P = this._Pl || (this._Pl = new Float64Array(this.la.length));
+    for (let k = 0; k < n; k++) {
+      const clL = periodic || k > 0 ? cl[periodic ? (k - 1 + n) % n : k - 1] : 0, clR = periodic || k < n - 1 ? cl[k] : 0;
+      const xm = periodic ? r[(k - 1 + n) % n] : k > 0 ? r[k - 1] : 0, xp = periodic ? r[(k + 1) % n] : k < n - 1 ? r[k + 1] : 0;
+      P[k] = (gam / Aa[k]) * (clL * (r[k] - xm) + clR * (r[k] - xp));
+    }
+    const nf = periodic ? n : n - 1;
+    for (let f = 0; f < nf; f++) {
+      const f2 = f + 1 === n ? 0 : f + 1, u = ua[f];
+      const inflow = gm[f] * (P[f2] - P[f]) + gd[f] * (r[f2] - r[f]) + (u < 0 ? -u * r[f2] : -u * r[f]);
+      fo[f] = -dt * inflow;
+    }
+  }
+
+  // Solids transport for the accepted step. Each face carries the liquid volume that actually
+  // crossed it (explicit flux + implicit correction, VsT/VpT, which sum exactly to the transport
+  // part of delta). The solids go with it, upwind and implicit in the solids fraction:
+  //   φ'_k = (m_k A_k + Σ_in V_f φ'_donor) / (h_k A_k + Σ_in V_f),
+  // i.e. the new fraction is a volume-weighted mean of what the cell kept and what flowed in, so
+  // it stays between the neighbouring fractions even when a step moves more liquid through a cell
+  // than it holds (thick tip films, large implicit steps). Solved by symmetric Gauss–Seidel sweeps
+  // (one or two in a draining bore), then applied as face fluxes V_f φ'_donor, so the solids
+  // are conserved exactly. The old scheme moved solids with the explicit fluxes only, which in
+  // stiff cells differ a lot from what the implicit liquid update moved: the fraction swung
+  // between 0 and 1 and the clipping created solids (SAICCS heated: +0.72 µL against 0.53 µL left
+  // on the part; oven: +2.6 µL). Result: dM (solids volume change per cell, m³).
+  _moveSolids() {
+    const geo = this.geo, { Nj, N, area, periodic } = geo;
+    const h = this.h, m = this.m, mask = this.mask, Vd = this.isVoid;
+    const phi = this.phiO, inV = this.sOut, dM = this.dM, VsT = this.VsT, VpT = this.VpT;
+    // usable faces (not cut away, not between two held cells) and the phi-neighbour of each cell
+    if (!this._jp) {
+      this._jp = new Int32Array(N); this._fS = new Uint8Array(N); this._fP = new Uint8Array(N); this._act = new Int32Array(N);
+      for (let k = 0; k < N; k++) { const j = k % Nj; this._jp[k] = j < Nj - 1 ? k + 1 : periodic ? k - Nj + 1 : -1; }
+    }
+    const JP = this._jp, fS = this._fS, fP = this._fP, act = this._act;
+    for (let k = 0; k < N; k++) {
+      fS[k] = k + Nj < N && !Vd[k] && !Vd[k + Nj] && !(mask[k] && mask[k + Nj]) && VsT[k] !== 0 ? 1 : 0;
+      const k2 = JP[k];
+      fP[k] = k2 >= 0 && !Vd[k] && !Vd[k2] && !(mask[k] && mask[k2]) && VpT[k] !== 0 ? 1 : 0;
+      phi[k] = h[k] > 0 ? Math.min(1, m[k] / h[k]) : 0; inV[k] = 0;
+    }
+    for (let k = 0; k < N; k++) {
+      if (fS[k]) { const v = VsT[k]; if (v > 0) inV[k + Nj] += v; else inV[k] -= v; }
+      if (fP[k]) { const v = VpT[k]; if (v > 0) inV[JP[k]] += v; else inV[k] -= v; }
+    }
+    // cells whose fraction can change: free film with inflow
+    let na = 0;
+    for (let k = 0; k < N; k++) if (!mask[k] && !Vd[k] && inV[k] > 0) act[na++] = k;
+    const update = (k) => {
+      let num = m[k] * area[k];
+      const kd = k - Nj; if (kd >= 0 && fS[kd] && VsT[kd] > 0) num += VsT[kd] * phi[kd];
+      if (fS[k] && VsT[k] < 0) num -= VsT[k] * phi[k + Nj];
+      const j = k % Nj, kl = j > 0 ? k - 1 : periodic ? k + Nj - 1 : -1;
+      if (kl >= 0 && fP[kl] && VpT[kl] > 0) num += VpT[kl] * phi[kl];
+      if (fP[k] && VpT[k] < 0) num -= VpT[k] * phi[JP[k]];
+      const pn = Math.min(1, Math.max(0, num / (h[k] * area[k] + inV[k]))), ch = Math.abs(pn - phi[k]);
+      phi[k] = pn;
+      return ch;
+    };
+    for (let sweep = 0; sweep < 16; sweep++) {
+      let ch = 0;
+      if (sweep % 2 === 0) { for (let a = 0; a < na; a++) { const c = update(act[a]); if (c > ch) ch = c; } }
+      else { for (let a = na - 1; a >= 0; a--) { const c = update(act[a]); if (c > ch) ch = c; } }
+      if (ch < 1e-8) break;
+    }
+    dM.fill(0);
+    for (let k = 0; k < N; k++) {
+      if (fS[k]) { const v = VsT[k], k2 = k + Nj, S = v > 0 ? v * phi[k] : v * phi[k2]; dM[k] -= S; dM[k2] += S; }
+      if (fP[k]) { const v = VpT[k], k2 = JP[k], S = v > 0 ? v * phi[k] : v * phi[k2]; dM[k] -= S; dM[k2] += S; }
+    }
+  }
+
   // Advance one step of size this.dt. Returns false if rejected (state restored).
   step(maxRel = 0.25) {
-    const geo = this.geo, { Ni, Nj, ds, w, area, periodic } = geo;
+    const geo = this.geo, { Ni, Nj, w, area, periodic } = geo;
+    const dsR = this.dsR, dC = this.dC;
     const N = geo.N;
     const h = this.h;
     if (this.dtCap > 0 && this.dt > this.dtCap) this.dt = this.dtCap;
@@ -255,7 +347,7 @@ export class FilmSolver {
     this._anyMask1 = false; for (let k = 0; k < N; k++) if (this.mask[k] === 1) { this._anyMask1 = true; break; }
     const vmax = this._rates();
     // CFL for explicit advection: rates do not depend on dt, so just shorten the step
-    if (this._minW === undefined) { let mw = ds; for (let k = 0; k < N; k++) if (w[k] < mw) mw = w[k]; this._minW = mw; }
+    if (this._minW === undefined) { let mw = Infinity; for (let i = 0; i < Ni; i++) if (dsR[i] < mw) mw = dsR[i]; for (let k = 0; k < N; k++) if (w[k] < mw) mw = w[k]; this._minW = mw; }
     const minW = this._minW;
     this.cflLimited = false;
     if (vmax * this.dt > this.cflMax * minW) { this.dt = (this.cflMax * minW) / vmax; this.cflLimited = true; }
@@ -268,21 +360,26 @@ export class FilmSolver {
     const gdS = this._gdS || (this._gdS = new Float64Array(ni)), AS = this._AS || (this._AS = new Float64Array(ni));
     const uaS = this._uaS || (this._uaS = new Float64Array(ni));
     const r = this.lr;
+    const fo = this._fo || (this._fo = new Float64Array(Math.max(Ni, Nj)));
+    const VsT = this.VsT, VpT = this.VpT, FsE = this.FsE, FpE = this.FpE;
+    VsT.fill(0); VpT.fill(0);
     for (let j = 0; j < Nj; j++) {
       for (let i = 0; i < ni; i++) {
         const k = i * Nj + j; idx[i] = k; AS[i] = area[k]; r[i] = delta[k];
         if (i < ni - 1) {
           const k2 = k + Nj; const wf = 0.5 * (w[k] + w[k2]);
           const cut = this.isVoid[k] || this.isVoid[k2] ? 0 : 1;
-          clS[i] = (cut * wf) / ds;
+          clS[i] = (cut * wf) / dC[i];
           const Mf = 0.5 * (M[k] + M[k2]);
-          gmS[i] = (cut * Mf * wf) / ds;
-          gdS[i] = (cut * Mf * 0.5 * (D[k] + D[k2]) * wf) / ds;
+          gmS[i] = (cut * Mf * wf) / dC[i];
+          gdS[i] = (cut * Mf * 0.5 * (D[k] + D[k2]) * wf) / dC[i];
           uaS[i] = cut * this.uS[k];
         }
       }
       this._lineSolve(idx, ni, false, clS, gmS, gdS, uaS, AS, r, this.solverS);
+      this._lineFlux(ni, false, clS, gmS, gdS, uaS, AS, r, fo);
       for (let i = 0; i < ni; i++) delta[idx[i]] = r[i];
+      for (let i = 0; i < ni - 1; i++) VsT[idx[i]] = dt * FsE[idx[i]] + fo[i];
     }
     // --- phi-lines
     const nj = Nj, idxP = this._idxP || (this._idxP = new Int32Array(nj));
@@ -296,26 +393,32 @@ export class FilmSolver {
           const k2 = i * Nj + ((j + 1) % nj);
           const dist = 0.5 * (w[k] + w[k2]);
           const cut = this.isVoid[k] || this.isVoid[k2] ? 0 : 1;
-          clP[j] = (cut * ds) / dist;
+          clP[j] = (cut * dsR[i]) / dist;
           const Mf = 0.5 * (M[k] + M[k2]);
-          gmP[j] = (cut * Mf * ds) / dist;
-          gdP[j] = (cut * Mf * 0.5 * (D[k] + D[k2]) * ds) / dist;
+          gmP[j] = (cut * Mf * dsR[i]) / dist;
+          gdP[j] = (cut * Mf * 0.5 * (D[k] + D[k2]) * dsR[i]) / dist;
           uaP[j] = cut * this.uP[k];
         }
       }
       this._lineSolve(idxP, nj, periodic, clP, gmP, gdP, uaP, AP, r, this.solverP);
+      this._lineFlux(nj, periodic, clP, gmP, gdP, uaP, AP, r, fo);
       for (let j = 0; j < nj; j++) delta[idxP[j]] = r[j];
+      for (let j = 0; j < (periodic ? nj : nj - 1); j++) VpT[idxP[j]] = dt * FpE[idxP[j]] + fo[j];
     }
     // --- accept / reject
     let rel = 0;
     const hp = this.hp;
+    const cap = this._endCaps();
     for (let k = 0; k < N; k++) {
       if (this.mask[k]) continue;
-      const hn = h[k] + delta[k];
+      let hn = h[k] + delta[k];
+      // liquid above what an end cell can keep (cross-jet strip, tip pool) is removed right after
+      // the step, so only the part that stays counts toward the step-size control
+      if (cap && hn > cap[k]) hn = Math.max(cap[k], h[k]);
       if (!(hn === hn)) { rel = Infinity; this.worst = k; break; }
       // small undershoots ahead of a capillary front are clipped to the precursor (mass tracked)
       if (hn < 0 && -hn > 0.5 * h[k] + 2 * hp) { rel = Infinity; this.worst = k; break; }
-      const rr = Math.abs(delta[k]) / (h[k] + 20 * hp);
+      const rr = Math.abs(hn - h[k]) / (h[k] + 20 * hp);
       if (rr > rel) { rel = rr; this.worst = k; }
     }
     if (rel > maxRel) {
@@ -324,16 +427,18 @@ export class FilmSolver {
       return false;
     }
     // apply transport
-    const m = this.m, Rm = this.Rm, c = this.coat;
+    const m = this.m, c = this.coat;
+    this._moveSolids(dt);
+    const dM = this.dM;
     let dep = 0;
     for (let k = 0; k < N; k++) {
       if (this.mask[k]) { h[k] = this.hFix[k]; continue; }
       dep += this.src[k] * dt * area[k];
       h[k] += delta[k];
-      m[k] += dt * Rm[k];
-      if (m[k] < 0) m[k] = 0;
+      m[k] += dM[k] / area[k] + dt * this.src[k] * this.srcPhi;
+      if (m[k] < 0) { this.stats.solidsClipGain += -m[k] * area[k]; m[k] = 0; }
       if (h[k] < hp) { this.stats.clipped += (hp - h[k]) * area[k]; h[k] = hp; }
-      if (m[k] > h[k]) m[k] = h[k];
+      if (m[k] > h[k]) { this.stats.solidsClipLoss += (m[k] - h[k]) * area[k]; m[k] = h[k]; }
     }
     this.stats.deposited += dep;
     // liquid that left the free film into held (plug/bath) cells this step: explicit inflow plus
@@ -425,7 +530,7 @@ export class FilmSolver {
   // (Tate: V ≈ 0.6 · 2π r γ / (ρ g)); a cross-jet removes it if its dynamic pressure beats the
   // capillary hold of the opening (~2γ/r); otherwise it dries in place (tip deposit).
   _tipPool(dt) {
-    const { Ni, Nj, area, s, L, edgeEnd, ds, rHyd } = this.geo;
+    const { Ni, Nj, area, s, L, edgeEnd, rHyd } = this.geo;
     const g = 9.81;
     if (!this.pool) this.pool = [{ V: 0, M: 0 }, { V: 0, M: 0 }];
     for (const side of [0, 1]) {
@@ -471,12 +576,42 @@ export class FilmSolver {
     }
   }
 
+  // End region whose excess joins the pool: three nominal cells (L/ns, so the pool physics does
+  // not change with tip refinement) plus the bevel's cut-away length.
   poolReach(side) {
-    const { Ni, ds } = this.geo;
+    const { ds, L, sE } = this.geo;
     if (side === 0 || !this.geo.hasVoid) return 3 * ds;
     let maxCut = 0;
-    for (const e of this.geo.endCell) maxCut = Math.max(maxCut, (Ni - 1 - e) * ds);
+    for (const e of this.geo.endCell) maxCut = Math.max(maxCut, this.geo.uniform ? (this.geo.Ni - 1 - e) * ds : L - sE[e + 1]);
     return 3 * ds + maxCut;
+  }
+
+  // Per-cell ceiling on the film at the open ends, from the same rules as _crossStrip (the
+  // cross-jet keeps at most es.lim within es.reach) and _tipPool (in a bore, gravity carries any
+  // film above hCap = r/4 in the end region into the pool). null when no end removes liquid.
+  _endCaps() {
+    const geo = this.geo, { Ni, Nj, s, L, edgeEnd } = geo, es = this.endStrip;
+    const inner = geo.surface === 'inner', g = 9.81;
+    const poolSides = inner && this.dripEnabled ? [0, 1].filter((side) => (side === 0 ? -this.gs[0] : this.gs[(Ni - 1) * Nj]) > 0.2 * g) : [];
+    if (!es && !poolSides.length) return null;
+    const cap = this._cap || (this._cap = new Float64Array(geo.N));
+    cap.fill(Infinity);
+    const dist = (side, i, k) => (side === 0 ? s[i] : (edgeEnd ? edgeEnd[k] : L - s[i]));
+    for (const side of poolSides) {
+      const reach = this.poolReach(side), hCap = 0.25 * geo.rHyd[side === 0 ? 0 : Ni - 1];
+      for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) {
+        const k = i * Nj + j, d = dist(side, i, k);
+        if (d >= 0 && d <= reach && hCap < cap[k]) cap[k] = hCap;
+      }
+    }
+    if (es) {
+      const side = es.end === 'start' ? 0 : 1;
+      for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) {
+        const k = i * Nj + j;
+        if (dist(side, i, k) <= es.reach && es.lim < cap[k]) cap[k] = es.lim;
+      }
+    }
+    return cap;
   }
 
   poolVolume() { return this.pool ? this.pool[0].V + this.pool[1].V : 0; }

@@ -1,4 +1,4 @@
-import { tipPoolBody } from './geometry.js';
+import { tipPoolBody, rowOfS, rowEdges } from './geometry.js';
 
 // Geometry of the drawn coating (shared by the 3D view and the volume checks).
 //
@@ -136,20 +136,20 @@ export function meshVolume(M, perRow = null) {
 // unit disc of the local ellipse) plus V (drawn volume) and Vheld.
 export function heldBody(geo, held, opts = {}) {
   if (!geo || geo.flat || geo.surface !== 'inner' || !held || !(held.V > 0)) return null;
-  const { Ni, ds, L, A, B } = geo;
+  const { Ni, L, A, B } = geo, { sE, dsR } = rowEdges(geo);
   const bv = geo.bevel || { deg: 0, clockDeg: 270, qmax: 0 };
   const tanB = bv.deg > 0 ? Math.tan(Math.min((bv.deg * Math.PI) / 180, 1.4)) : 0;
   const cb = ((bv.clockDeg ?? 270) * Math.PI) / 180, aT = A[Ni - 1], bT = B[Ni - 1];
   const qmax = bv.qmax || Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb));
   const dl = Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb)) || 1, dX = (aT * Math.cos(cb)) / dl, dY = (bT * Math.sin(cb)) / dl;
   const Fc = new Float64Array(Ni + 1);
-  for (let i = 0; i < Ni; i++) Fc[i + 1] = Fc[i] + A[i] * B[i] * ds;
-  const F = (z) => { if (z <= 0) return 0; if (z >= L) return Fc[Ni]; const i = Math.min(Ni - 1, Math.floor(z / ds)); return Fc[i] + A[i] * B[i] * (z - i * ds); };
+  for (let i = 0; i < Ni; i++) Fc[i + 1] = Fc[i] + A[i] * B[i] * dsR[i];
+  const F = (z) => { if (z <= 0) return 0; if (z >= L) return Fc[Ni]; const i = rowOfS(geo, z); return Fc[i] + A[i] * B[i] * (z - sE[i]); };
   const sBot = (u) => L - (1 - u) * qmax * tanB;
-  const rAt = (s) => { const i = Math.max(0, Math.min(Ni - 1, Math.floor(s / ds))); return Math.min(A[i], B[i]); };
+  const rAt = (s) => { const i = rowOfS(geo, s); return Math.min(A[i], B[i]); };
   const th = Math.min(Math.max(opts.theta ?? 0.5, 0), 1.45), sag = (s) => (rAt(s) * (1 - Math.sin(th))) / Math.cos(th);
-  const eps = 0.5 * ds;
-  const atTop = held.a <= 1e-3 * eps, atTip = held.b >= L - eps;
+  const eps = 0.5 * Math.min(dsR[0], dsR[Ni - 1]);
+  const atTop = held.a <= 0.5e-3 * dsR[0], atTip = held.b >= L - eps;
   const len = Math.max(held.b - held.a, 1e-9);
   // meniscus depth at each free end, never more than a third of the body length
   const hmB = atTip ? 0 : Math.min(sag(held.b), len / 3);

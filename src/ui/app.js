@@ -350,7 +350,7 @@ function previewGeometry(force) {
   if (!force && state.result && state.resultSpecKey === specKey(state.spec)) return;
   try {
     const geo = buildGeometry(state.spec);
-    const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm), voidMask: geo.voidMask, edgeEnd: geo.edgeEnd, bevel: geo.bevel };
+    const sg = { Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, sE: geo.sE, dsR: geo.dsR, surface: geo.surface, flat: geo.flat, periodic: geo.periodic, s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B), area: geo.area, pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm), voidMask: geo.voidMask, edgeEnd: geo.edgeEnd, bevel: geo.bevel };
     view3d.setGeometry(sg);
     const st0 = state.spec.stages[0];
     view3d.tilt = st0 ? st0.tilt ?? defaultTilt(st0.type, state.spec.geometry) : defaultTilt('dwell', state.spec.geometry);

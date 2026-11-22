@@ -2,7 +2,7 @@
 // vacuum withdraw, airflow, flash/dwell, cure) on one FilmSolver, recording frames and
 // time histories for visualisation.
 
-import { buildGeometry, gravityBody } from './geometry.js';
+import { buildGeometry, gravityBody, rowOfS } from './geometry.js';
 import { FilmSolver } from './film.js';
 import { resolveCoating, resolveSubstrate, activatedSubstrate, contactAngleOWRK, wenzel } from './materials.js';
 import { dipFilmOuter, brethertonFilm, capillaryLength, ellipseResistance, viscosity, G0, dipSpeedAt, dipWithdrawTable, dipPositionAt } from './physics.js';
@@ -75,23 +75,27 @@ export function makeContext(spec) {
   // cumulative cross-section area along the lumen (for plug kinematics)
   // (the bevelled rows only count the uncut part of the section, `holdArea`, which is what the
   // drawn liquid bodies hold too)
-  const { Ni, ds, crossArea } = geo, holdArea = geo.holdArea || crossArea;
+  const { Ni, crossArea, sE, dsR } = geo, holdArea = geo.holdArea || crossArea;
   const edges = new Float64Array(Ni + 1);
-  for (let i = 0; i < Ni; i++) edges[i + 1] = edges[i] + holdArea[i] * ds;
+  for (let i = 0; i < Ni; i++) edges[i + 1] = edges[i] + holdArea[i] * dsR[i];
   ctx.L = geo.L;
   ctx.cumA = (s) => {
-    const x = Math.max(0, Math.min(geo.L, s)) / ds;
-    const i = Math.min(Ni - 1, Math.floor(x));
-    return edges[i] + (x - i) * (edges[i + 1] - edges[i]);
+    const x = Math.max(0, Math.min(geo.L, s));
+    const i = rowOfS(geo, x);
+    const fr = geo.uniform ? x / geo.ds - i : (x - sE[i]) / dsR[i];
+    return edges[i] + fr * (edges[i + 1] - edges[i]);
   };
   ctx.invCumA = (v) => {
     if (v <= 0) return v / Math.max(crossArea[0], 1e-12);
     if (v >= edges[Ni]) return geo.L + (v - edges[Ni]) / Math.max(crossArea[Ni - 1], 1e-12);
     let lo = 0, hi = Ni;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (edges[mid] <= v) lo = mid; else hi = mid; }
-    return (lo + (v - edges[lo]) / Math.max(edges[lo + 1] - edges[lo], 1e-30)) * ds;
+    const fr = (v - edges[lo]) / Math.max(edges[lo + 1] - edges[lo], 1e-30);
+    return geo.uniform ? (lo + fr) * geo.ds : sE[lo] + fr * dsR[lo];
   };
-  ctx.iOf = (s) => Math.max(0, Math.min(Ni - 1, Math.floor(s / ds)));
+  ctx.iOf = (s) => rowOfS(geo, s);
+  // length of the row at s (rows are refined toward a bevelled tip)
+  ctx.dsAt = (s) => dsR[rowOfS(geo, s)];
   updateWetting(ctx);
   return ctx;
 }
@@ -151,14 +155,14 @@ function trapLiquid(ctx, a, b) {
   const { geo, fs, coat } = ctx;
   ctx.trapped = { a, b };
   for (let i = 0; i < geo.Ni; i++) {
-    if (geo.s[i] < a - 0.5 * geo.ds || geo.s[i] > b + 0.5 * geo.ds) continue;
+    if (geo.s[i] < a - 0.5 * geo.dsR[i] || geo.s[i] > b + 0.5 * geo.dsR[i]) continue;
     for (let j = 0; j < geo.Nj; j++) {
       const k = i * geo.Nj + j;
       fs.mask[k] = 1; fs.hFix[k] = geo.rHyd[i]; fs.h[k] = geo.rHyd[i]; fs.m[k] = geo.rHyd[i] * coat.solids; fs.alpha[k] = 0;
     }
   }
 }
-function isTrappedCell(ctx, i) { const t = ctx.trapped; return !!t && ctx.geo.s[i] >= t.a - 0.5 * ctx.geo.ds && ctx.geo.s[i] <= t.b + 0.5 * ctx.geo.ds; }
+function isTrappedCell(ctx, i) { const t = ctx.trapped, g = ctx.geo; return !!t && g.s[i] >= t.a - 0.5 * g.dsR[i] && g.s[i] <= t.b + 0.5 * g.dsR[i]; }
 
 // ---------------------------------------------------------------- stages
 const STAGES = {};
@@ -258,7 +262,7 @@ STAGES.airflow = {
         const Lth = (rhoJet * Q * 1005) / Math.max(hc * geo.perim[i], 1e-12);
         const T = Tamb + (Tjet - Tamb) * Math.exp(-x / Math.max(Lth, 1e-9));
         for (let j = 0; j < geo.Nj; j++) fs.Tair[i * geo.Nj + j] = T;
-        x += geo.ds;
+        x += geo.dsR[i];
       }
     } else {
       fs.Tair.fill(Unoz > 0 ? Tjet : Tamb);
@@ -297,7 +301,9 @@ STAGES.airflow = {
 // A plug forms when liquid collecting in a bore bridges the cross-section (the thin-film
 // picture breaks down there). It then moves under gravity, capillarity and any air jet
 // pressure, leaving a Bretherton film behind, or stays held by capillarity.
-function plugDt(ctx) { const p = ctx.plug; return p && !p.done && p.speed > 0 ? Math.max((ctx.geo.ds / p.speed) * 0.5, 1e-4) : 0.5; }
+function plugDt(ctx) { const p = ctx.plug; return p && !p.done && p.speed > 0 ? Math.max((plugDs(ctx, p) / p.speed) * 0.5, 1e-4) : 0.5; }
+// a plug moves at most half a row per step; rows are shorter toward a bevelled tip
+function plugDs(ctx, p) { return Math.min(ctx.dsAt(p.rear), ctx.dsAt(p.front())); }
 
 function managePlug(ctx, st) {
   const { geo, fs } = ctx;
@@ -388,14 +394,14 @@ function detectBridge(ctx, air, gS) {
     const k = i * Nj + j; if (fs.mask[k]) continue;
     V += Math.max(0, fs.h[k] - 4 * fs.hp) * geo.area[k];
   }
-  if (V < 0.5 * geo.crossArea[i0] * geo.ds) return;
+  if (V < 0.5 * geo.crossArea[i0] * geo.dsR[i0]) return;
   // the bridged liquid now belongs to the plug
   for (let i = lo; i <= hi; i++) for (let j = 0; j < Nj; j++) {
     const k = i * Nj + j; if (fs.mask[k]) continue;
     if (fs.h[k] > 4 * fs.hp) { const frac = fs.m[k] / fs.h[k]; fs.h[k] = 4 * fs.hp; fs.m[k] = fs.h[k] * frac; }
   }
   const dir = air.p > 0 ? air.dir : gS >= 0 ? 1 : -1;
-  const a = geo.s[lo] - 0.5 * geo.ds, b = geo.s[hi] + 0.5 * geo.ds;
+  const a = geo.s[lo] - 0.5 * geo.dsR[lo], b = geo.s[hi] + 0.5 * geo.dsR[hi];
   const plug = new Plug(ctx, dir > 0 ? a : b, dir, V);
   plug.maxSpeed = 0; plug.formed = fs.t;
   ctx.plug = plug;
@@ -574,7 +580,7 @@ function plugStep(ctx, plug, dt, drive) {
   const mu = viscosity(coat, coat.solids, 0, fs.Tf[ctx.iOf(plug.rear) * geo.Nj]);
   // viscous resistance of the plug
   let Rv = 0;
-  for (let i = ctx.iOf(lo); i <= ctx.iOf(hi); i++) Rv += ellipseResistance(mu, geo.A[i], geo.B[i]) * geo.ds;
+  for (let i = ctx.iOf(lo); i <= ctx.iOf(hi); i++) Rv += ellipseResistance(mu, geo.A[i], geo.B[i]) * geo.dsR[i];
   const frontInside = plug.dir > 0 ? sf < geo.L - 1e-9 : sf > 1e-9;
   const gamma = fs.gamma;
   const cth = Math.cos(ctx.thetaMean);
@@ -729,7 +735,7 @@ STAGES.fill = {
   },
   dtMax(ctx) {
     const F = ctx._fill;
-    if (F && F.plug && !F.plug.done) return Math.max((ctx.geo.ds / Math.max(F.plug.speed, 1e-5)) * 0.5, 1e-4);
+    if (F && F.plug && !F.plug.done) return Math.max((plugDs(ctx, F.plug) / Math.max(F.plug.speed, 1e-5)) * 0.5, 1e-4);
     return 0.5;
   },
 };
@@ -780,7 +786,7 @@ STAGES.vacuum = {
     // air drawn through the open lumen by the vacuum
     const dP = st.pressureKpa * 1e3;
     let RvA = 0;
-    for (let i = 0; i < geo.Ni; i++) RvA += ellipseResistance(AIR_MU, geo.A[i], geo.B[i]) * geo.ds;
+    for (let i = 0; i < geo.Ni; i++) RvA += ellipseResistance(AIR_MU, geo.A[i], geo.B[i]) * geo.dsR[i];
     const Qlam = dP / RvA;
     const iMin = geo.crossArea.indexOf(Math.min(...geo.crossArea));
     const Ulim = 0.6 * Math.sqrt((2 * dP) / AIR_RHO);
@@ -797,7 +803,7 @@ STAGES.vacuum = {
     ctx.aux = { air: airMax, airScfh: Q / SCFH };
     if (tl - ctx._vac.t0 >= st.airTime) ctx._stageDone = true;
   },
-  dtMax(ctx) { return ctx._plug && !ctx._plug.done ? Math.max(ctx.geo.ds / Math.max(ctx._plug.speed, 1e-4) * 0.5, 1e-4) : 1; },
+  dtMax(ctx) { return ctx._plug && !ctx._plug.done ? Math.max(plugDs(ctx, ctx._plug) / Math.max(ctx._plug.speed, 1e-4) * 0.5, 1e-4) : 1; },
 };
 
 STAGES.dip = {
@@ -886,8 +892,8 @@ STAGES.dip = {
   dtMax(ctx, st) {
     const dp = ctx._dip;
     if (!dp) return 1;
-    if (dp.plug && !dp.plug.done) return Math.max(ctx.geo.ds / Math.max(dp.plug.speed, 1e-5) * 0.5, 1e-4);
-    return Math.max((ctx.geo.ds / Math.max(dp.Umax, 1e-6)) * 0.5, 1e-3);
+    if (dp.plug && !dp.plug.done) return Math.max(plugDs(ctx, dp.plug) / Math.max(dp.plug.speed, 1e-5) * 0.5, 1e-4);
+    return Math.max((ctx.geo.dsMin / Math.max(dp.Umax, 1e-6)) * 0.5, 1e-3);
   },
 };
 
@@ -1055,10 +1061,10 @@ function snapshotHistory(ctx, si) {
 
 export function serialiseGeometry(geo) {
   return {
-    Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, surface: geo.surface, flat: geo.flat, periodic: geo.periodic,
+    Ni: geo.Ni, Nj: geo.Nj, N: geo.N, L: geo.L, ds: geo.ds, sE: Array.from(geo.sE), dsR: Array.from(geo.dsR), surface: geo.surface, flat: geo.flat, periodic: geo.periodic,
     s: Array.from(geo.s), phi: Array.from(geo.phi), A: Array.from(geo.A), B: Array.from(geo.B),
     area: Float32Array.from(geo.area), pos: Float32Array.from(geo.pos), nrm: Float32Array.from(geo.nrm),
     voidMask: Uint8Array.from(geo.voidMask || new Uint8Array(geo.N)), bevel: geo.bevel, edgeEnd: Float32Array.from(geo.edgeEnd || new Float64Array(geo.N)),
-    poolReach: [3 * geo.ds, 3 * geo.ds + (geo.hasVoid ? Math.max(...Array.from(geo.endCell, (e) => (geo.Ni - 1 - e) * geo.ds)) : 0)],
+    poolReach: [3 * geo.ds, 3 * geo.ds + (geo.hasVoid ? Math.max(...Array.from(geo.endCell, (e) => geo.L - geo.sE[e + 1])) : 0)],
   };
 }

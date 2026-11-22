@@ -303,7 +303,10 @@ test('3D view draws the simulated liquid volume in every frame (SAICCS fill/with
       if (Math.abs(e) > Math.abs(worst)) worst = e;
     }
     assert(Math.abs(worst) < 0.012, `${id}: drawn volume off by ${(worst * 100).toFixed(2)}%`);
-    out.push(`${id} ${n} frames, worst ${(worst * 100).toFixed(2)}% (${[...kinds].join('/')})`);
+    // the solids moved with the liquid: none created or destroyed by clipping (was +0.72 µL on the heated run)
+    const clip = res.stats.solidsClipGain + res.stats.solidsClipLoss, sol = res.metrics.massBalance.solids_uL * 1e-9;
+    assert(clip < 1e-3 * sol, `${id}: solids clipping ${(clip * 1e9).toFixed(4)} µL vs ${(sol * 1e9).toFixed(3)} µL of solids`);
+    out.push(`${id} ${n} frames, worst ${(worst * 100).toFixed(2)}% (${[...kinds].join('/')}), solids clipping ${(clip * 1e9).toExponential(1)} µL`);
   }
   return out.join('; ');
 });

@@ -1,6 +1,6 @@
 import { test, assert, near, run } from './harness.mjs';
 import { PentaSolver, solveDense } from '../src/core/linalg.js';
-import { buildGeometry, parseProfileCSV, profileToCSV, tipPoolBody } from '../src/core/geometry.js';
+import { buildGeometry, parseProfileCSV, profileToCSV, tipPoolBody, rowOfS } from '../src/core/geometry.js';
 import { getPreset } from '../src/core/presets.js';
 import { makeContext } from '../src/core/processes.js';
 import { FilmSolver } from '../src/core/film.js';
@@ -177,7 +177,7 @@ test('CSV profile import: headers, units, delimiters and a frustum bore volume',
   const L = 20, r1 = 1.5, r2 = 0.6;
   const fr = parseProfileCSV(`s_mm,diameter_mm\n0,${2 * r1}\n${L},${2 * r2}\n`);
   const geo = buildGeometry({ geometry: { type: 'custom', points: fr.points }, surface: 'inner', grid: { ns: 200, nphi: 24 } });
-  let V = 0; for (let i = 0; i < geo.Ni; i++) V += geo.crossArea[i] * geo.ds;
+  let V = 0; for (let i = 0; i < geo.Ni; i++) V += geo.crossArea[i] * geo.dsR[i];
   const Vref = Math.PI * L / 3 * (r1 * r1 + r1 * r2 + r2 * r2) * 1e-9;
   near(V, Vref, 1e-4, 'frustum volume');
   // Dense noisy measurement → averaged down, volume kept
@@ -186,7 +186,7 @@ test('CSV profile import: headers, units, delimiters and a frustum bore volume',
   const dn = parseProfileCSV(txt);
   assert(dn.points.length <= 240, 'decimated to ' + dn.points.length);
   const g2 = buildGeometry({ geometry: { type: 'custom', points: dn.points }, surface: 'inner', grid: { ns: 200, nphi: 24 } });
-  let V2 = 0; for (let i = 0; i < g2.Ni; i++) V2 += g2.crossArea[i] * g2.ds;
+  let V2 = 0; for (let i = 0; i < g2.Ni; i++) V2 += g2.crossArea[i] * g2.dsR[i];
   near(V2, Vref, 2e-3, 'noisy frustum volume');
   return `frustum ${(V * 1e9).toFixed(3)} µL vs ${(Vref * 1e9).toFixed(3)}; 4001 noisy points → ${dn.points.length}`;
 });
@@ -256,7 +256,7 @@ test('tip pool drawn as a meniscus body: volume matches the held pool (analytic 
     near(body.V, Vp, 3e-3, 'cartridge body volume');
     let Vv = 0; const NX = 70, NS = 400, z0 = body.top - ds;
     for (let n = 0; n < NS; n++) {
-      const sz = z0 + ((n + 0.5) / NS) * (L - z0), i = Math.min(Ni - 1, Math.floor(sz / ds)), a = A[i], b = B[i], qi = Math.hypot(a * Math.cos(cb), b * Math.sin(cb));
+      const sz = z0 + ((n + 0.5) / NS) * (L - z0), i = rowOfS(geo, sz), a = A[i], b = B[i], qi = Math.hypot(a * Math.cos(cb), b * Math.sin(cb));
       for (let p = 0; p < NX; p++) for (let q = 0; q < NX; q++) {
         const X = -1 + (2 * (p + 0.5)) / NX, Y = -1 + (2 * (q + 0.5)) / NX, r2 = X * X + Y * Y; if (r2 > 1) continue;
         const qT = ((a * X * Math.cos(cb) + b * Y * Math.sin(cb)) / qi) * qmax;
@@ -313,7 +313,7 @@ test('drawn coating volume: film layer, full bore and held liquid bodies hold th
   const geo = buildGeometry({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });
   const cx = makeContext({ ...getPreset('saiccs_ha_heated'), grid: { ns: 120, nphi: 32 } });
   for (const V of [8e-9, 120e-9]) {
-    const top = (() => { let lo = 0, hi = geo.L; for (let it = 0; it < 60; it++) { const m = 0.5 * (lo + hi); let v = 0; for (let i = 0; i < geo.Ni; i++) { const s0 = i * geo.ds, s1 = s0 + geo.ds; v += Math.PI * geo.A[i] * geo.B[i] * Math.max(0, s1 - Math.max(s0, m)); } if (v > V) lo = m; else hi = m; } return 0.5 * (lo + hi); })();
+    const top = (() => { let lo = 0, hi = geo.L; for (let it = 0; it < 60; it++) { const m = 0.5 * (lo + hi); let v = 0; for (let i = 0; i < geo.Ni; i++) { const s0 = geo.sE[i], s1 = geo.sE[i + 1]; v += Math.PI * geo.A[i] * geo.B[i] * Math.max(0, s1 - Math.max(s0, m)); } if (v > V) lo = m; else hi = m; } return 0.5 * (lo + hi); })();
     const sSolver = cx.invCumA(cx.cumA(cx.L) - V); // the solver's (bevel-aware) meniscus level
     const b = heldBody(geo, { a: sSolver, b: geo.L, V, kind: 'plug' }, { theta: 0.6 });
     near(b.V, V, 3e-3, 'cartridge tip plug volume');
@@ -330,17 +330,80 @@ test('bevel: liquid-holding section of the bevelled rows is the uncut circular s
   const r = 0.7e-3, g = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2, id: 1.4, tipBevelDeg: 35 }, surface: 'inner', grid: { ns: 200, nphi: 32 } });
   const tanB = Math.tan((55 * Math.PI) / 180), cut = 2 * r * tanB;
   let Vh = 0, Vf = 0;
-  for (let i = 0; i < g.Ni; i++) if (g.L - (i + 1) * g.ds < cut) { Vh += g.holdArea[i] * g.ds; Vf += g.crossArea[i] * g.ds; }
+  for (let i = 0; i < g.Ni; i++) if (g.L - g.sE[i + 1] < cut) { Vh += g.holdArea[i] * g.dsR[i]; Vf += g.crossArea[i] * g.dsR[i]; }
   const Vrow = Vf - Math.PI * r * r * cut; // full-section part of the row that straddles the top of the cut
   const e = near(Vh - Vrow, Math.PI * r * r * r * tanB, 2e-3, 'bevel holds half the cut length');
   assert(g.holdArea[g.Ni - 1] < 0.02 * g.crossArea[g.Ni - 1] && g.holdArea[0] === g.crossArea[0], 'empty at the point, full above the cut');
   // mid-cut row: the plane passes through the axis, half the section is left
-  const iMid = Math.round((g.L - r * tanB) / g.ds - 0.5), fMid = g.holdArea[iMid] / g.crossArea[iMid];
+  const iMid = rowOfS(g, g.L - r * tanB), fMid = g.holdArea[iMid] / g.crossArea[iMid];
   assert(Math.abs(fMid - 0.5) < 0.035, `half section at mid-cut (got ${fMid.toFixed(3)})`); // within half a row of the axis
   // square end: unchanged
   const sq = buildGeometry({ geometry: { type: 'catheter', length: 20, od: 2, id: 1.4 }, surface: 'inner', grid: { ns: 40, nphi: 16 } });
   assert(sq.holdArea.every((v, i) => v === sq.crossArea[i]), 'square end holds the full section');
   return `bevelled length holds ${((Vh - Vrow) * 1e9).toFixed(3)} µL of ${((Vf - Vrow) * 1e9).toFixed(3)} µL (error ${(e * 100).toFixed(2)}%)`;
+});
+
+// Thick film draining down the bore of the SAICCS cartridge into its bevelled tip (no drip-off, no
+// evaporation): large implicit steps in the stiff tip cells, where explicit and implicit fluxes differ.
+function tipDrainSolver(grid) {
+  const spec = getPreset('saiccs_ha_heated');
+  const geo = buildGeometry({ ...spec, grid });
+  const coat = { ...COATINGS.silicone_oil_1000, mu0: 0.3, evap0: 0, cure: { model: 'none' } };
+  const fs = new FilmSolver(geo, coat, { drip: false, precursor: 5e-8 });
+  fs.setContactAngle(0.05);
+  fs.setGravity([0, 0, 9.81]);
+  for (let k = 0; k < geo.N; k++) {
+    const i = Math.floor(k / geo.Nj), z = geo.s[i] / geo.L;
+    if (geo.voidMask[k]) continue;
+    fs.h[k] = 60e-6 * (1 + 0.5 * Math.sin(9 * z) + 0.3 * Math.cos(3 * (k % geo.Nj))); // ≥ 12 µm everywhere
+    fs.m[k] = 0.1 * fs.h[k];
+  }
+  return { geo, fs };
+}
+
+test('solids move with the liquid the implicit step moved (uniform solids stay uniform, solids conserved)', () => {
+  const { geo, fs } = tipDrainSolver({ ns: 120, nphi: 32 });
+  const solids0 = fs.solidsVolume(), v0 = fs.volume();
+  fs.dt = 1e-3;
+  fs.advance(15, null, { dtMax: 2 });
+  let dev = 0;
+  for (let k = 0; k < geo.N; k++) if (!geo.voidMask[k] && fs.h[k] > 4 * fs.hp) dev = Math.max(dev, Math.abs(fs.m[k] / fs.h[k] - 0.1));
+  near(fs.volume() - fs.stats.clipped, v0, 1e-9, 'liquid volume (+ precursor clipping)');
+  near(fs.solidsVolume(), solids0, 1e-6, 'solids volume');
+  assert(dev < 1e-6, `uniform solids fraction kept (max deviation ${dev.toExponential(2)})`);
+  assert(fs.stats.solidsClipGain + fs.stats.solidsClipLoss < 1e-6 * solids0, 'no solids created or destroyed by clipping');
+  // tip film thickened well beyond the start: this is the stiff regime the old explicit solids flux got wrong
+  let hTip = 0; for (let j = 0; j < geo.Nj; j++) hTip = Math.max(hTip, fs.h[geo.endCell[j] * geo.Nj + j]);
+  return `${fs.stats.steps} steps; φ deviation ${dev.toExponential(1)}; solids drift ${((fs.solidsVolume() / solids0 - 1) * 100).toExponential(1)}%; tip film up to ${(hTip * 1e6).toFixed(0)} µm`;
+});
+
+test('axial grid refined toward a bevelled tip: smooth rows, exact bore volume, conservation and drawn volume', () => {
+  const spec = getPreset('saiccs_ha_heated');
+  const g1 = buildGeometry({ ...spec, grid: { ns: 120, nphi: 32 } }), g3 = buildGeometry({ ...spec, grid: { ns: 120, nphi: 32, tipRefine: 3 } });
+  assert(g1.uniform && g1.Ni === 120, 'off by default');
+  assert(!g3.uniform && g3.Ni > 140 && g3.Ni < 170, `refined rows (Ni = ${g3.Ni})`);
+  let ratio = 1, sum = 0;
+  for (let i = 0; i < g3.Ni; i++) { sum += g3.dsR[i]; if (i) ratio = Math.max(ratio, g3.dsR[i] / g3.dsR[i - 1], g3.dsR[i - 1] / g3.dsR[i]); }
+  near(sum, g3.L, 1e-12, 'rows span the part');
+  assert(ratio < 1.25, `neighbouring rows differ by < 25% (max ${ratio.toFixed(3)})`);
+  near(g3.dsR[g3.Ni - 1], g1.ds / 3, 5e-3, 'tip rows 3× shorter');
+  let nb = 0; for (let i = 0; i < g3.Ni; i++) if (g3.L - g3.sE[i + 1] < 1.9e-3) nb++;
+  assert(nb >= 18, `≥ 18 rows over the bevel (${nb}; 6 on the uniform grid)`);
+  // bore and holding volumes do not depend on the grid
+  const vol = (g, arr) => { let v = 0; for (let i = 0; i < g.Ni; i++) v += arr[i] * g.dsR[i]; return v; };
+  near(vol(g3, g3.crossArea), vol(g1, g1.crossArea), 2e-4, 'bore volume');
+  near(vol(g3, g3.holdArea), vol(g1, g1.holdArea), 2e-3, 'liquid-holding volume');
+  // the solver conserves liquid and solids on the refined grid, and the drawn film holds the film volume
+  const { geo, fs } = tipDrainSolver({ ns: 120, nphi: 32, tipRefine: 3 });
+  const v0 = fs.volume(), s0 = fs.solidsVolume();
+  fs.dt = 1e-3; fs.advance(10, null, { dtMax: 2 });
+  near(fs.volume() - fs.stats.clipped, v0, 1e-9, 'liquid volume (refined)');
+  near(fs.solidsVolume(), s0, 1e-6, 'solids volume (refined)');
+  const film = new Float64Array(geo.N); let Vf = 0;
+  for (let k = 0; k < geo.N; k++) if (!geo.voidMask[k]) { film[k] = fs.h[k] - fs.hp; Vf += film[k] * geo.area[k]; }
+  const Vd = meshVolume(coatingMesh(geo, film, null));
+  const e = near(Vd, Vf, 5e-3, 'drawn film volume (refined)');
+  return `Ni ${g3.Ni}, ${nb} rows over the bevel, max row ratio ${ratio.toFixed(3)}; drawn film ${(e * 100).toFixed(2)}% off`;
 });
 
 run();

@@ -1,6 +1,7 @@
 // Unwrapped surface map: axial position (x) vs circumferential angle / width (y).
 
 import { colorAt, fmt } from './colormap.js';
+import { rowOfS } from '../core/geometry.js';
 
 export class Heatmap {
   constructor(container) {
@@ -21,16 +22,24 @@ export class Heatmap {
     Object.assign(this, { geo, values, range, cmap, unit, overlays, describe: opts.describe || null });
     const rgb = opts.rgb || null;
     const { Ni, Nj } = geo;
-    this.img.width = Ni; this.img.height = Nj;
+    // one image column per smallest row (rows are refined toward a bevelled tip), so the map's
+    // x axis stays linear in s
+    let dmin = geo.L / Ni;
+    if (geo.dsR) for (let i = 0; i < Ni; i++) dmin = Math.min(dmin, geo.dsR[i]);
+    const NX = Math.max(Ni, Math.min(1600, Math.round(geo.L / dmin)));
+    const colRow = new Int32Array(NX);
+    for (let x = 0; x < NX; x++) colRow[x] = NX === Ni && !geo.sE ? x : rowOfS(geo, ((x + 0.5) / NX) * geo.L);
+    this.img.width = NX; this.img.height = Nj;
     const g = this.img.getContext('2d');
-    const id = g.createImageData(Ni, Nj);
+    const id = g.createImageData(NX, Nj);
     const [lo, hi] = range;
-    for (let i = 0; i < Ni; i++) for (let j = 0; j < Nj; j++) {
+    for (let x = 0; x < NX; x++) for (let j = 0; j < Nj; j++) {
+      const i = colRow[x];
       const v = values[i * Nj + j];
       const cut = geo.voidMask && geo.voidMask[i * Nj + j];
       const k = i * Nj + j;
       const [r, gg, b] = cut ? [21, 24, 29] : rgb ? [255 * rgb[3 * k], 255 * rgb[3 * k + 1], 255 * rgb[3 * k + 2]] : colorAt(cmap, (v - lo) / (hi - lo));
-      const p = 4 * ((Nj - 1 - j) * Ni + i);
+      const p = 4 * ((Nj - 1 - j) * NX + x);
       id.data[p] = r; id.data[p + 1] = gg; id.data[p + 2] = b; id.data[p + 3] = 255;
     }
     g.putImageData(id, 0, 0);
@@ -82,7 +91,7 @@ export class Heatmap {
     const r = this.canvas.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
     if (x < L || x > W - R || y < T || y > H - B) { this.tip.style.display = 'none'; return; }
-    const i = Math.min(this.geo.Ni - 1, Math.floor(((x - L) / (W - L - R)) * this.geo.Ni));
+    const i = rowOfS(this.geo, ((x - L) / (W - L - R)) * this.geo.L);
     const j = Math.min(this.geo.Nj - 1, Math.floor((1 - (y - T) / (H - T - B)) * this.geo.Nj));
     const v = this.values[i * this.geo.Nj + j];
     const ang = this.geo.flat ? '' : `, φ ${((this.geo.phi[j] * 180) / Math.PI).toFixed(0)}°`;

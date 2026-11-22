@@ -67,14 +67,72 @@ export function profileFor(spec) {
   throw new Error('Unknown geometry type ' + g.type);
 }
 
+// Axial cell edges (m, Ni + 1 values from 0 to L). Uniform at L/ns, except toward a bevelled tip
+// (bores with tipBevelDeg), where rows can be made `grid.tipRefine` times shorter (default 1 = off) over the
+// bevel cut plus `grid.tipZoneMm` above it (default 2 mm), blended in smoothly over another 2 mm.
+// The cut is only ~1.9 mm of a 36 mm cartridge (6 rows at ns = 120), so the bevel-face film, its
+// edge bead and the tip pool were under-resolved; refining only there costs far less than a
+// uniformly finer grid. The cell density is integrated and inverted, so neighbouring rows differ
+// by a few per cent at most.
+export function axialEdges(spec, prof, Lm, ns, flat) {
+  const g = spec.geometry, bevAxis = g.tipBevelDeg || 0;
+  const hasBevel = !flat && (spec.surface || 'outer') === 'inner' && bevAxis > 0 && bevAxis < 90;
+  const f = hasBevel ? Math.max(1, Math.min(8, spec.grid?.tipRefine ?? 1)) : 1;
+  const edges = (n) => { const e = new Float64Array(n + 1), d = Lm / n; for (let i = 0; i <= n; i++) e[i] = i * d; return e; };
+  if (!(f > 1)) return edges(ns);
+  // cut length of the bevel from the tip section (same construction as in buildGeometry)
+  const bev = ((90 - bevAxis) * Math.PI) / 180, cb = ((g.bevelClockDeg ?? 270) * Math.PI) / 180;
+  const aT = prof.a(prof.L) * 1e-3, bT = prof.b(prof.L) * 1e-3;
+  const cutLen = 2 * Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb)) * Math.tan(Math.min(bev, 1.4));
+  const zone = Math.min(Lm * 0.5, cutLen + (spec.grid?.tipZoneMm ?? 2) * 1e-3), blend = Math.min(2e-3, Lm * 0.25);
+  const s1 = Lm - zone, s0 = s1 - blend;
+  const dens = (x) => 1 + (f - 1) * smoothstep((x - s0) / blend); // cells per nominal cell length
+  const M = 4000, cum = new Float64Array(M + 1);
+  for (let m = 0; m < M; m++) cum[m + 1] = cum[m] + dens(((m + 0.5) / M) * Lm) / M;
+  const n = Math.max(ns, Math.round(ns * cum[M]));
+  const e = new Float64Array(n + 1);
+  let m = 0;
+  for (let i = 1; i < n; i++) {
+    const target = (i / n) * cum[M];
+    while (m < M - 1 && cum[m + 1] < target) m++;
+    e[i] = ((m + (target - cum[m]) / Math.max(cum[m + 1] - cum[m], 1e-30)) / M) * Lm;
+  }
+  e[n] = Lm;
+  return e;
+}
+
+// Row index containing axial position z (m) on a built or serialised geometry (clamped).
+export function rowOfS(geo, z) {
+  const { Ni } = geo, sE = geo.sE;
+  if (!sE || geo.uniform) return Math.max(0, Math.min(Ni - 1, Math.floor(z / geo.ds)));
+  if (z <= sE[0]) return 0;
+  if (z >= sE[Ni]) return Ni - 1;
+  let lo = 0, hi = Ni;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (sE[mid] <= z) lo = mid; else hi = mid; }
+  return lo;
+}
+
+// Row edges and lengths for a built or serialised geometry (older serialised results are uniform).
+export function rowEdges(geo) {
+  if (geo.sE && geo.dsR) return { sE: geo.sE, dsR: geo.dsR };
+  const sE = new Float64Array(geo.Ni + 1), dsR = new Float64Array(geo.Ni).fill(geo.ds);
+  for (let i = 0; i <= geo.Ni; i++) sE[i] = i * geo.ds;
+  return { sE, dsR };
+}
+
 export function buildGeometry(spec) {
   const prof = profileFor(spec);
-  const Ni = spec.grid?.ns || 120;
+  const Ni0 = spec.grid?.ns || 120;
   const flat = !!prof.flat;
   const Nj = spec.grid?.nphi || (flat ? 24 : 40);
   const surf = flat ? 'outer' : (spec.surface || 'outer');
   const Lm = prof.L * 1e-3;
-  const ds = Lm / Ni;
+  const ds = Lm / Ni0; // nominal (base) axial spacing
+  // Axial rows: uniform at ds, refined toward a bevelled tip (see axialEdges)
+  const sE = axialEdges(spec, prof, Lm, Ni0, flat);
+  const Ni = sE.length - 1;
+  const dsR = new Float64Array(Ni);
+  for (let i = 0; i < Ni; i++) dsR[i] = Ni === Ni0 ? ds : sE[i + 1] - sE[i];
   const N = Ni * Nj;
   const dphi = 2 * Math.PI / Nj;
   const s = new Float64Array(Ni);
@@ -88,16 +146,17 @@ export function buildGeometry(spec) {
   const crossArea = new Float64Array(Ni), perim = new Float64Array(Ni), rHyd = new Float64Array(Ni);
   for (let j = 0; j < Nj; j++) phi[j] = (j + 0.5) * dphi;
   for (let i = 0; i < Ni; i++) {
-    s[i] = (i + 0.5) * ds;
+    s[i] = Ni === Ni0 ? (i + 0.5) * ds : 0.5 * (sE[i] + sE[i + 1]); // (uniform grids keep their exact centres)
     const smm = s[i] * 1e3;
     A[i] = prof.a(smm) * 1e-3;
     B[i] = prof.b(smm) * 1e-3;
   }
   const deriv = (arr, i) => {
     if (Ni < 2) return 0;
-    if (i === 0) return (arr[1] - arr[0]) / ds;
-    if (i === Ni - 1) return (arr[Ni - 1] - arr[Ni - 2]) / ds;
-    return (arr[i + 1] - arr[i - 1]) / (2 * ds);
+    const u = Ni === Ni0;
+    if (i === 0) return (arr[1] - arr[0]) / (u ? ds : s[1] - s[0]);
+    if (i === Ni - 1) return (arr[Ni - 1] - arr[Ni - 2]) / (u ? ds : s[Ni - 1] - s[Ni - 2]);
+    return (arr[i + 1] - arr[i - 1]) / (u ? 2 * ds : s[i + 1] - s[i - 1]);
   };
   const width = prof.flat ? prof.a(0) * 2e-3 : 0;
   for (let i = 0; i < Ni; i++) {
@@ -128,7 +187,7 @@ export function buildGeometry(spec) {
         ep.set([tpx / tpl, tpy / tpl, 0], 3 * k);
         pos.set([a * c, b * sn, s[i]], 3 * k);
       }
-      area[k] = w[k] * ds;
+      area[k] = w[k] * dsR[i];
       P += w[k];
     }
     perim[i] = P;
@@ -169,9 +228,9 @@ export function buildGeometry(spec) {
     const tanB = Math.tan(Math.min(bev, 1.4)), cutLen = 2 * qmax * tanB, nSub = 32;
     const seg = (u0) => (u0 <= -1 ? 1 : u0 >= 1 ? 0 : (Math.acos(u0) - u0 * Math.sqrt(1 - u0 * u0)) / Math.PI);
     for (let i = 0; i < Ni; i++) {
-      if (Lm - (i + 1) * ds >= cutLen) continue;
+      if (Lm - sE[i + 1] >= cutLen) continue;
       let f = 0;
-      for (let m = 0; m < nSub; m++) f += seg(1 - (Lm - (i + (m + 0.5) / nSub) * ds) / (qmax * tanB));
+      for (let m = 0; m < nSub; m++) f += seg(1 - (Lm - (Ni === Ni0 ? (i + (m + 0.5) / nSub) * ds : sE[i] + ((m + 0.5) / nSub) * dsR[i])) / (qmax * tanB));
       holdArea[i] = crossArea[i] * (f / nSub);
     }
   }
@@ -179,7 +238,7 @@ export function buildGeometry(spec) {
   const endCell = new Int32Array(Nj);
   for (let j = 0; j < Nj; j++) { let ii = Ni - 1; while (ii > 0 && voidMask[ii * Nj + j]) ii--; endCell[j] = ii; }
   return {
-    spec, surface: surf, flat, periodic: !flat, Ni, Nj, N, ds, dphi, L: Lm, s, phi, A, B,
+    spec, surface: surf, flat, periodic: !flat, Ni, Nj, N, ds, dsR, sE, dsMin: Math.min(...dsR), uniform: Ni === Ni0, dphi, L: Lm, s, phi, A, B,
     w, area, kc, nrm, es, ep, pos, crossArea, holdArea, perim, rHyd, voidMask, edgeEnd, endCell, hasVoid: voidMask.some((v) => v),
     bevel: { deg: (bev * 180) / Math.PI, faceDeg: bevAxis, clockDeg: (cb * 180) / Math.PI, qmax },
   };
@@ -352,7 +411,7 @@ export function profileToCSV(points) {
 // Returns null when there is nothing to draw.
 export function tipPoolBody(geo, Vpool, film = null, opts = {}) {
   if (!geo || geo.flat || geo.surface !== 'inner' || !(Vpool > 0)) return null;
-  const { Ni, Nj, ds, L, A, B, s, area } = geo;
+  const { Ni, Nj, L, A, B, s, area } = geo, { sE, dsR } = rowEdges(geo);
   const bv = geo.bevel || { deg: 0, clockDeg: 270, qmax: 0 };
   const tanB = bv.deg > 0 ? Math.tan(Math.min((bv.deg * Math.PI) / 180, 1.4)) : 0;
   const cb = ((bv.clockDeg ?? 270) * Math.PI) / 180, aT = A[Ni - 1], bT = B[Ni - 1];
@@ -362,8 +421,8 @@ export function tipPoolBody(geo, Vpool, film = null, opts = {}) {
   const dl = Math.hypot(aT * Math.cos(cb), bT * Math.sin(cb)) || 1, dX = (aT * Math.cos(cb)) / dl, dY = (bT * Math.sin(cb)) / dl;
   // cumulative F(s) = ∫0^s a b ds' (a column of the unit disc holds a·b·dX·dY·ds; rows are piecewise constant, like the solver)
   const Fc = new Float64Array(Ni + 1);
-  for (let i = 0; i < Ni; i++) Fc[i + 1] = Fc[i] + A[i] * B[i] * ds;
-  const F = (z) => { if (z <= 0) return 0; if (z >= L) return Fc[Ni]; const i = Math.min(Ni - 1, Math.floor(z / ds)); return Fc[i] + A[i] * B[i] * (z - i * ds); };
+  for (let i = 0; i < Ni; i++) Fc[i + 1] = Fc[i] + A[i] * B[i] * dsR[i];
+  const F = (z) => { if (z <= 0) return 0; if (z >= L) return Fc[Ni]; const i = rowOfS(geo, z); return Fc[i] + A[i] * B[i] * (z - sE[i]); };
   const sBot = (u) => L - (1 - u) * qmax * tanB; // bevel plane (the opening)
   const NQ = opts.nq || 48, pts = [];
   for (let p = 0; p < NQ; p++) for (let q = 0; q < NQ; q++) {
@@ -379,7 +438,7 @@ export function tipPoolBody(geo, Vpool, film = null, opts = {}) {
   // the film cell k (wall: ρ = 1) is inside the body if its centre lies below the meniscus line
   const uCell = new Float64Array(Nj);
   for (let j = 0; j < Nj; j++) { const ph = geo.phi[j]; uCell[j] = Math.cos(ph) * dX + Math.sin(ph) * dY; }
-  const covered = (s0, hm, k) => { const i = Math.floor(k / Nj), j = k % Nj; return !(geo.voidMask && geo.voidMask[k]) && s[i] >= s0 - hm && s[i] <= sBot(uCell[j]) + 0.5 * ds; };
+  const covered = (s0, hm, k) => { const i = Math.floor(k / Nj), j = k % Nj; return !(geo.voidMask && geo.voidMask[k]) && s[i] >= s0 - hm && s[i] <= sBot(uCell[j]) + 0.5 * dsR[i]; };
   const filmVol = (s0, hm) => { if (!film) return 0; let V = 0; for (let k = 0; k < Ni * Nj; k++) if (film[k] > 0 && covered(s0, hm, k)) V += film[k] * area[k]; return V; };
   const solve = (hm) => {
     let lo = Math.max(hm, 0), hi = L + hm; // V_body − target falls as s0 rises

@@ -10,6 +10,8 @@ The part has a straight axis *s* ∈ [0, L] and an elliptical cross-section with
 
 The flat coupon uses a rectangular, non-periodic grid.
 
+Axial rows are uniform (Δs = L/ns) by default. `grid.tipRefine` (1–8, default 1) makes the rows toward a bevelled bore tip that many times shorter over the bevel cut plus `grid.tipZoneMm` (default 2 mm) above it, blended in over 2 mm so neighbouring rows differ by < 25 %. The finite-volume operators use each row's length Δs_i and the centre-to-centre distances between rows; the pool reach and the bridging/jet length scales stay in nominal cells (L/ns), so the physics does not change with the refinement. Refining the tip costs about as much as a uniformly finer grid, because the time step is set by the accuracy control in the tip cells, not by a CFL limit.
+
 At a bevelled tip (face at angle α to the axis, β = 90° − α from square) the cut removes the part of each section with normalised chord coordinate u < u₀(s) = 1 − (L − s)/(q_max tan β). The bulk-liquid bookkeeping (plugs, fill, held columns: the cumulative volume V(s) = ∫A_hold ds that places their menisci) uses the liquid-holding area A_hold = πab · (acos u₀ − u₀√(1 − u₀²))/π, averaged over each row, so the bevelled length holds exactly half its full-section volume. Air speeds and hydraulic radii keep the full section, since air leaves through the open side of the bevel.
 
 ## 2. Film equation
@@ -24,7 +26,11 @@ p = −γ (∇²h + κ_c² h) − Π(h) − ρ (g·n) h
 - g·n > 0 means the film hangs below the surface (a ceiling), which is Rayleigh–Taylor unstable.
 - τ is the interfacial air shear.
 
-Solids height *m = hφ* is advected with the liquid flux, using the upwind solids fraction. Solvent evaporation stops when φ reaches φ_max.
+Solids height *m = hφ* moves with the liquid. Each face carries the liquid volume that actually crossed it in the step: the explicit flux plus the face form of the implicit (ADI) correction, which sum exactly to the liquid update. The solids fraction is upwinded implicitly,
+```
+φ'_k = (m_k A_k + Σ_in V_f φ'_donor) / (h_k A_k + Σ_in V_f),
+```
+a volume-weighted mean of what the cell kept and what flowed in, so φ stays between its neighbours' values even when a step moves more liquid through a cell than it holds (thick tip films). It is solved by symmetric Gauss–Seidel sweeps and applied as face fluxes V_f φ'_donor, so solids are conserved exactly. Solvent evaporation stops when φ reaches φ_max.
 
 ## 3. Constitutive laws
 - **Wetting:** Owens–Wendt–Rabel–Kaelble, cos θ = −1 + 2(√(γ_s^d γ_l^d) + √(γ_s^p γ_l^p))/γ_l, then Wenzel cos θ* = r cos θ.

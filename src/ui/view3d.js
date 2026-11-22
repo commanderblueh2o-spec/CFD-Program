@@ -4,6 +4,7 @@
 
 import { colorAt } from './colormap.js';
 import { coatingMesh, coatPoint } from '../core/drawn.js';
+import { rowOfS } from '../core/geometry.js';
 
 const VS = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss;
@@ -344,7 +345,7 @@ export class View3D {
     const geo = this.geo;
     const list = (Array.isArray(bodies) ? bodies : [bodies]).filter(Boolean);
     if (!list.length || !geo || geo.flat || geo.surface !== 'inner') return;
-    const { Ni, ds, A, B, L } = geo, R = this.radial, [n0, n1] = this.cutN;
+    const { Ni, A, B, L } = geo, R = this.radial, [n0, n1] = this.cutN;
     const tp = [], tn = [], tc = [], tg = [], tcut = [];
     for (const body of list) {
       let rgb = body.rgb, gloss = body.gloss ?? 1;
@@ -355,7 +356,7 @@ export class View3D {
       }
       if (!rgb) rgb = [0.08, 0.30, 0.80];
       const zBot = body.zBot || ((r2, u) => body.sBottom(u));
-      const P = (u, v, s) => { const i = Math.max(0, Math.min(Ni - 1, Math.floor(s / ds))), X = u * body.dX - v * body.dY, Y = u * body.dY + v * body.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
+      const P = (u, v, s) => { const i = rowOfS(geo, s), X = u * body.dX - v * body.dY, Y = u * body.dY + v * body.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
       const n0v = tp.length / 3;
       const NR = 20, NM = 72;
       for (const face of ['top', 'bottom']) {
@@ -414,7 +415,7 @@ export class View3D {
   }
 
   ringAt(sPos, scale = 1.12) {
-    const geo = this.geo, i = Math.max(0, Math.min(geo.Ni - 1, Math.round(sPos / geo.ds - 0.5)));
+    const geo = this.geo, i = rowOfS(geo, sPos);
     return [(geo.A[i] || 0) * scale * this.radial, geo.flat ? 0 : (geo.B[i] || 0) * scale * this.radial, i];
   }
 
