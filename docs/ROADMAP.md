@@ -102,13 +102,16 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 - [x] Optional axial grid refinement toward a bevelled tip (`grid.tipRefine`, default off); bit-identical results on uniform grids
 - [x] Step-size control ignores film an end cell loses right after the step (cross-jet strip, tip pool)
 
+## Done (v0.14.0) — realistic liquid and plastic shading (owner priority 2)
+- [x] Translucent, thickness-dependent liquid; fresnel studio reflections and highlights; volumetric liquid bodies; PP/PC plastic shading; glossy cured HA layer. See the owner-priority item below
+
 ## Done (v0.10.2) — saved setups get the bevel (owner feedback)
 - [x] The owner's browser restored a cartridge setup saved before the bevel existed (tipBevelDeg 0), so no bevel change showed. Saved and linked setups are now migrated on load: cartridges get the 35° face-to-axis bevel, and other bevels are converted from the old from-square angle
 - [x] Tip close-up is exactly side-on, so the cut shows as a straight line at its true angle
 
 ## Next
 ### Owner priorities (2026-11-17) — work these first, in order
-- [ ] **Coating volume in 3D, especially at the tip.** Check that what is drawn matches the simulated liquid volume. The rendered coating layer (film plus flooded cells), integrated over the drawn geometry at true scale, should equal the film and pool volumes in the mass balance. Add a test and a UI check.
+- [x] **Coating volume in 3D, especially at the tip.** (complete: every sub-step below is done and checked in every frame by the tests) Check that what is drawn matches the simulated liquid volume. The rendered coating layer (film plus flooded cells), integrated over the drawn geometry at true scale, should equal the film and pool volumes in the mass balance. Add a test and a UI check.
   - [x] (v0.11.0) The tip pool is drawn as a meniscus-shaped body instead of flooding every cell within `poolReach`. It fills up from the long-side point of the bevel, its lower face spans the opening in the bevel plane, and its free surface is a concave meniscus (spherical-cap depth r(1 − sin θ)/cos θ, as a volume-preserving paraboloid). Its volume is the held pool plus the film in the cells it covers (`tipPoolBody` in `src/core/geometry.js`). The overlay shows both. Tests: analytic square and bevelled tube, an independent voxel count on the SAICCS cartridge (0.3 and 3.5 µL within 1%), and film bookkeeping. `ui-test` checks the drawn body against the solver's pool at the largest-pool frame and takes a tip close-up (`6-tip-pool.png`).
   - Finding: the oven preset holds up to 6.8 µL at the tip during the cure (plus 1.5 µL of film under it), a 5.3 mm tall body. The old drawing flooded only the last ~2.7 mm (`poolReach`) whatever the volume, so it under-drew the pool by about half. With the heated preset only ~0.1 µL sits in the bevel scoop.
   - [x] (v0.12.0) Drawn-volume check for the whole coating (film layer at true scale + tip pool + plugs + full bore) against the solver's bookkeeping, in every frame. `src/core/drawn.js` builds the drawn mesh for the view and the tests (`coatingMesh`, `meshVolume`, `heldBody`, `frameLiquid`); frames now record the held liquid (`aux.held`: volume and meniscus positions). Tests: analytic oval bore, thick film inside and outside tubes, coupon edge beads, plug menisci, tip plugs on the cartridge, and every frame of the SAICCS heated and lumen-dip presets (worst 0.49% and 0.35%). `ui-test` steps through the run and fails above 1.5%, and the overlay shows "Liquid on the part … · drawn at true scale …".
@@ -124,13 +127,17 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
   - Findings (v0.13.0, presets): heated 1.271 → 1.268 µm, CoV 37%, cure 72% (unchanged), 3 666 → 3 147 steps. Oven: dry mean 3.17 → 1.52 µm, CoV 412% → 141%, tip deposit max 90 → 16 µm (pool still 6.8 µL at its largest, 3.4 µL dried at the tip): most of the old oven tip deposit was solids created by the clipping. Lumen dip: CoV 72% → 14%, and the run is no longer chaotic (1.9 / 2 / 2.001 / 2.1 mm/s → CoV 15 / 14 / 14 / 13%; before 2 vs 2.001 mm/s gave 72% vs 55%). Tip film (heated, distance from the open edge, ns = 120 / ×2 tip / uniform 200): 0–0.3 mm 6.5 / 6.0 / 6.2 µm, 0.3–1 mm 4.4 / 3.4 / 3.4 µm, 1–3 mm 2.50 / 2.42 / 2.42 µm, 3–6 mm 2.14 / 2.13 / 2.11 µm, so the tip now converges with the grid (before: 8.3 / 7.7 / 8.3 and 6.4 / 4.5 / 4.4 µm).
   - Remaining: oven (65 s) and silicone-drops (64 s) presets now run slightly over the 60 s target (more steps once the tip film is no longer artificially stiffened by spurious solids; ~10% overhead from the solids sweep). See the performance item.
 - [ ] **More realistic graphics.**
-  - Translucent liquid with a refraction-like tint and thickness-dependent opacity (thin films pale, thick ones deep blue).
-  - Specular highlights and a soft environment light.
-  - Proper translucent cartridge plastic (PP/PC) with edge darkening (fresnel).
-  - Soft shadows or ambient occlusion in the bore.
-  - A smooth meniscus at contact lines and film fronts.
-  - The cured HA film as a thin glossy layer.
-  - Keep it fast (the animation must stay smooth), and screenshot before and after.
+  - [x] (v0.14.0) Translucent liquid with thickness-dependent opacity: a thin wet film is pale and shows the plastic through it, a thick one is deep blue (opacity 0.35 → 0.85 with the same log-thickness scale as the colour), and it turns opaque as it dries or cures. Rendered with premultiplied blending and a depth pre-pass, so only the front-most liquid layer is shaded (no order-dependent double layers on tubes or self-overlapping menisci).
+  - [x] (v0.14.0) Specular highlights and a soft studio environment (dim sky, overhead softbox, two tall strip lights beside the viewer) reflected with Schlick fresnel (F0 0.02 for the liquid), so wet surfaces get long vertical highlights along the bore and brighter, more opaque edges at grazing view.
+  - [x] (v0.14.0) Liquid bodies (plugs, filling bore, tip pool) look volumetric: their section on the cut-open plane is shaded by the depth of liquid behind it (Beer–Lambert style: deeper in the middle, lighter toward the walls); meniscus surfaces are see-through and glossy; the meniscus centre has a single normal.
+  - [x] (v0.14.0) Cartridge plastic: lighter PP/PC with wrapped diffuse (light scattered in the plastic), darkening toward grazing view (longer path through the wall) and a faint glossy reflection. Bare cells now show the wall itself instead of a grey coating layer.
+  - [x] (v0.14.0) Cured HA drawn as a thin glossy layer (gloss 0.4 vs 0.1 for a dry film), so it keeps a soft sheen with the strip-light highlights.
+  - [x] (v0.14.0) `tools/ui-look.mjs`: 3D-view-only screenshots (oblique and side-on at the tip, at fill / plug / tip pool / end), render time, and before/after with `COATSIM_HTML=<old build>`.
+  - Finding: the extra passes and the heavier shader cost ~1.6× per frame in software GL (82 vs 50 ms at 1600×950 in headless SwiftShader); on any GPU this is well under a millisecond, so the animation stays smooth.
+  - [ ] Translucent cartridge wall in the full view (seeing the bore liquid through the uncut plastic, refraction-like tint), and a tinted, see-through cut-plane wall band.
+  - [ ] Soft shadows or ambient occlusion in the bore.
+  - [ ] Smoother film fronts and contact lines (a thin meniscus ridge where a draining film ends; the opacity already fades over one cell).
+  - Keep it fast (the animation must stay smooth), and screenshot before and after (`tools/ui-look.mjs`).
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
 - [ ] Get typical fill/withdraw pump rates from the owner
 - [x] Make the lumen dip column drainage / tip pooling less sensitive to tiny parameter changes (see v0.6 robustness note). Fixed by the v0.13.0 solids transport: the sensitivity came from spurious solids at the pooled tip, not from the drainage itself

@@ -496,12 +496,12 @@ const HELD_TEXT = { fill: 'Bore filled', plug: 'Liquid plug', column: 'Liquid co
 
 function stateColors(fr) {
   const res = state.result, c = res._coat, n = fr.h.length, hp = res._hp;
-  const rgb = new Float32Array(3 * n), gloss = new Float32Array(n);
+  const rgb = new Float32Array(3 * n), gloss = new Float32Array(n), opa = new Float32Array(n).fill(1);
   const canDry = c.solids < c.phiMax, curing = c.cure.model !== 'none';
   const pool = fr.aux && fr.aux.pool, geo = res.geometry, body = poolBody(fr);
   const inPool = (k) => (body ? body.inBody[k] === 1 : false) || (!!pool && pool[0] > 1e-12 && geo.s[Math.floor(k / geo.Nj)] <= geo.poolReach[0]);
   for (let k = 0; k < n; k++) {
-    if ((fr.mask && fr.mask[k] === 1) || inPool(k)) { rgb[3 * k] = 0.08; rgb[3 * k + 1] = 0.30; rgb[3 * k + 2] = 0.80; gloss[k] = 1; continue; } // flooded / bath / plug
+    if ((fr.mask && fr.mask[k] === 1) || inPool(k)) { rgb[3 * k] = 0.08; rgb[3 * k + 1] = 0.30; rgb[3 * k + 2] = 0.80; gloss[k] = 1; continue; } // flooded / bath / plug (the liquid body drawn over it is the see-through part)
     const w = fr.h[k] - hp;
     if (w <= 3 * hp) continue;
     const t = clamp(0.5 + 0.45 * Math.log10(w / res._wetRef), 0, 1);
@@ -512,9 +512,13 @@ function stateColors(fr) {
     const a = curing ? clamp(fr.alpha[k], 0, 1) : 0;
     r += (C_CURED[0] - r) * a; g += (C_CURED[1] - g) * a; b += (C_CURED[2] - b) * a;
     rgb[3 * k] = r; rgb[3 * k + 1] = g; rgb[3 * k + 2] = b;
-    gloss[k] = (1 - dd) * (1 - a);
+    // wet liquid is glossy and see-through (thin films pale and clear, thick ones deep); a dry film
+    // is matte and opaque; a cured HA film is a thin glossy layer
+    const set = Math.max(dd, a);
+    gloss[k] = (1 - set) + set * (0.1 + 0.3 * a);
+    opa[k] = 0.35 + 0.5 * t + (1 - (0.35 + 0.5 * t)) * set;
   }
-  return { rgb, gloss };
+  return { rgb, gloss, opa };
 }
 
 // Hover text for one cell of the coating-state map
@@ -640,7 +644,7 @@ function updateViews() {
   const fill = liq.fill, dfilm = liq.film;
   const LIQ = { rgb: [0.08, 0.30, 0.80], gloss: 1 };
   const pb = [body && state.field === 'state' ? { ...body, ...LIQ } : body, liq.held ? { ...liq.held, ...LIQ } : null];
-  if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, dfilm, marks, bare, sc.rgb, sc.gloss, fill, pb); }
+  if (state.field === 'state') { const sc = stateColors(fr); view3d.setField(vals, range, state.cmap, dfilm, marks, bare, sc.rgb, sc.gloss, fill, pb, sc.opa); }
   else if (state.field === 'diff') view3d.setField(vals, range, 'diverge', dfilm, marks, null, diffColors(vals, range[1]), null, fill, pb);
   else view3d.setField(vals, range, state.cmap, dfilm, marks, bare, null, null, fill, pb);
   view3d.liquidCheck = { expected: liq.expected, drawn: liq.drawn, held: liq.held ? liq.held.Vheld : 0, heldKind: liq.held ? liq.held.kind : null };

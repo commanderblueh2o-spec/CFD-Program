@@ -7,22 +7,56 @@ import { coatingMesh, coatPoint } from '../core/drawn.js';
 import { rowOfS } from '../core/geometry.js';
 
 const VS = `
-attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss;
-uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS;
-void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vS=aPos.z; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; gl_PointSize=3.0; }`;
+attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss; attribute float aOpa;
+uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS; varying float vO;
+void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vS=aPos.z; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; vO=aOpa; gl_PointSize=3.0; }`;
+// Shading (all output premultiplied, blended with ONE, ONE_MINUS_SRC_ALPHA):
+//  uMat 1 = cartridge plastic: wrapped diffuse (light scattered in the translucent PP/PC),
+//    darker toward grazing view (longer path through the plastic), faint glossy reflection.
+//  uMat 2 = coating / liquid: gloss vG (1 = wet liquid, ~0.4 cured film, ~0.1 dry film) sets the
+//    sharpness and strength of the highlights and of a soft studio environment reflection with
+//    Schlick fresnel (F0 = 0.02 for water-like liquid). Opacity vO (thin liquid films pale and see-
+//    through, thick ones deep) rises toward 1 at grazing angles like a real liquid layer; the
+//    reflection is added on top so highlights stay bright on transparent liquid. vO < 0.02 = bare.
 const FS = `
-precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS;
-uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec;
+precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS; varying float vO;
+uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec; uniform float uMat;
+vec3 env(vec3 r, vec3 f){
+  // soft studio around the camera: dim sky gradient, a large overhead softbox and two tall strip
+  // lights left and right of the viewer (long vertical highlights on the bore and the liquid)
+  vec3 up = vec3(0.0,1.0,0.0); vec3 rt = normalize(cross(up, f)); vec3 u2 = cross(f, rt);
+  float x = dot(r, rt), y = dot(r, u2), z = dot(r, f);
+  vec3 sky = mix(vec3(0.06,0.07,0.10), vec3(0.36,0.42,0.54), smoothstep(-0.5,0.9,y));
+  float strips = (smoothstep(0.30,0.06,abs(x-0.62)) + 0.7*smoothstep(0.24,0.05,abs(x+0.55))) * smoothstep(-0.2,0.3,z) * smoothstep(0.95,0.5,abs(y));
+  float top = smoothstep(0.80,0.95,y);
+  return sky + vec3(1.35,1.38,1.45)*strips + vec3(1.1)*top;
+}
 void main(){
   if (uCut > 0.5 && vCut > 1e-7) discard;
   if (uFlat < 0.5 && vS < uSec) discard; // section slice: everything above it is hidden
+  if (uFlat > 0.5) { gl_FragColor = vec4(vC, 1.0); return; }
+  if (vO < 0.02) discard; // bare: the wall underneath shows
   vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;
   vec3 v = normalize(uEye - vW);
-  vec3 l1 = normalize(vec3(0.4,0.9,0.6)); vec3 l2 = v;
-  float d = 0.55 + 0.35*max(dot(n,l1),0.0) + 0.35*max(dot(n,l2),0.0);
-  vec3 h = normalize(l1+v); float sp = pow(max(dot(n,h),0.0),40.0+60.0*vG)*(0.18+0.9*vG);
-  vec3 c = uFlat > 0.5 ? vC : vC*d + sp;
-  gl_FragColor = vec4(c, uAlpha);
+  float ndv = clamp(abs(dot(n,v)), 0.0, 1.0);
+  vec3 l1 = normalize(vec3(0.4,0.9,0.6));
+  vec3 amb = mix(vec3(0.30,0.28,0.27), vec3(0.46,0.50,0.58), 0.5+0.5*n.y);
+  vec3 r = reflect(-v, n), h = normalize(l1+v); vec3 E = env(r, v);
+  float fr = pow(1.0-ndv, 5.0);
+  vec3 c; vec3 sp; float a;
+  if (uMat < 1.5) {
+    float wrap = clamp((dot(n,l1)+0.6)/1.6, 0.0, 1.0);
+    c = vC*(amb + 0.45*wrap + 0.22*ndv) * mix(1.0, 0.55, pow(1.0-ndv, 1.6));
+    sp = vec3(0.16*pow(max(dot(n,h),0.0), 50.0)) + E*(0.10+0.9*fr)*0.45;
+    a = uAlpha;
+  } else {
+    float g = clamp(vG, 0.0, 1.0);
+    c = vC*(amb + 0.42*max(dot(n,l1),0.0) + 0.30*ndv);
+    float F = 0.02 + 0.98*fr;
+    sp = vec3(pow(max(dot(n,h),0.0), 30.0+220.0*g)*(0.10+1.1*g)) + E*(0.03+0.5*F)*(0.15+1.2*g);
+    a = uAlpha*mix(min(vO,1.0), 1.0, F*g);
+  }
+  gl_FragColor = vec4(c*a + sp*uAlpha, a);
 }`;
 
 function mat4() { return new Float32Array(16); }
@@ -49,13 +83,13 @@ export class View3D {
     const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     this.prog = p;
     this.loc = {};
-    for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss']) this.loc[a] = gl.getAttribLocation(p, a);
-    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec']) this.loc[u] = gl.getUniformLocation(p, u);
+    for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss', 'aOpa']) this.loc[a] = gl.getAttribLocation(p, a);
+    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat']) this.loc[u] = gl.getUniformLocation(p, u);
     this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
-      cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(),
+      cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(), copa: gl.createBuffer(),
       kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
-      ppos: gl.createBuffer(), pnrm: gl.createBuffer(), pcol: gl.createBuffer(), pcut: gl.createBuffer(), pgloss: gl.createBuffer(),
+      ppos: gl.createBuffer(), pnrm: gl.createBuffer(), pcol: gl.createBuffer(), pcut: gl.createBuffer(), pgloss: gl.createBuffer(), popa: gl.createBuffer(),
       lpos: gl.createBuffer(), lcol: gl.createBuffer() };
     this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.tgt = [0, 0, 0];
     this.cutaway = true; this.exag = 0; this.secZ = null; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
@@ -233,15 +267,15 @@ export class View3D {
   // thickness (coloured band) and the wall (grey band).
   // bodies: liquid bodies drawn as their own meshes (tipPoolBody: the meniscus-shaped pool at
   // the tip; heldBody: liquid filling the bore between curved menisci during fill and plugs).
-  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null, bodies = null) {
+  setField(values, range, cmap, film, markers = [], bare = null, rgbOverride = null, glossField = null, fill = null, bodies = null, opaField = null) {
     const geo = this.geo; if (!geo || !this.gl) return;
     const { Nj } = geo, cols = this.cols, rows = this.rows, n = rows * cols, R = this.radial;
     const inner = geo.surface === 'inner' && !geo.flat;
     const pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), col = new Float32Array(3 * n), cut = new Float32Array(n);
-    const cpos = new Float32Array(3 * n), ccol = new Float32Array(3 * n), ccut = new Float32Array(n), cgl = new Float32Array(n);
+    const cpos = new Float32Array(3 * n), ccol = new Float32Array(3 * n), ccut = new Float32Array(n), cgl = new Float32Array(n), cop = new Float32Array(n);
     const [lo, hi] = range;
     const ex = this.exag || 0;
-    const N = geo.N, cc = new Float32Array(3 * N), cg = new Float32Array(N), cd = new Float32Array(N), cf = new Float32Array(N);
+    const N = geo.N, cc = new Float32Array(3 * N), cg = new Float32Array(N), cd = new Float32Array(N), cf = new Float32Array(N), co = new Float32Array(N);
     for (let k = 0; k < N; k++) {
       if (bare && bare[k]) { cc[3 * k] = 0.50; cc[3 * k + 1] = 0.52; cc[3 * k + 2] = 0.56; }
       else if (rgbOverride) { cc[3 * k] = rgbOverride[3 * k]; cc[3 * k + 1] = rgbOverride[3 * k + 1]; cc[3 * k + 2] = rgbOverride[3 * k + 2]; }
@@ -249,9 +283,10 @@ export class View3D {
       cg[k] = glossField && !(bare && bare[k]) ? glossField[k] : 0;
       cd[k] = film && !(bare && bare[k]) ? film[k] * ex : 0;
       cf[k] = fill && fill[k] ? 1 : 0;
+      co[k] = bare && bare[k] ? 0 : opaField ? opaField[k] : 1; // 0 = bare (wall shows), < 1 = see-through liquid
     }
     const M = coatingMesh(geo, cd, cf);
-    const WALL = [0.60, 0.62, 0.66];
+    const WALL = [0.80, 0.83, 0.86]; // translucent PP/PC plastic (shaded as plastic in the shader)
     for (let v = 0; v < n; v++) {
       const k1 = M.blend[2 * v], k2 = M.blend[2 * v + 1], f = M.bf[v];
       pos[3 * v] = M.wall[3 * v] * R; pos[3 * v + 1] = M.wall[3 * v + 1] * R; pos[3 * v + 2] = M.wall[3 * v + 2];
@@ -261,6 +296,7 @@ export class View3D {
       cpos[3 * v] = M.coat[3 * v] * R; cpos[3 * v + 1] = M.coat[3 * v + 1] * R; cpos[3 * v + 2] = M.coat[3 * v + 2];
       for (let c = 0; c < 3; c++) ccol[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
       cgl[v] = cg[k1] * (1 - f) + cg[k2] * f;
+      cop[v] = co[k1] * (1 - f) + co[k2] * f;
       ccut[v] = inner ? cpos[3 * v] * this.cutN[0] + cpos[3 * v + 1] * this.cutN[1] : -1;
     }
     const blendAt = (i, jf) => {
@@ -293,7 +329,7 @@ export class View3D {
               for (const [Pq, rq, gq] of [[A, rgbA, gA], [B, rgbA, gA], [Cq, rgbB, gB], [B, rgbA, gA], [D, rgbB, gB], [Cq, rgbB, gB]]) { kp.push(...Pq); kn.push(n0, n1, 0); kc.push(...rq); kg.push(gq); }
             };
             if (prev.thick || row.thick) quad(prev.W, prev.C, row.W, row.C, prev.rgb, row.rgb, prev.gl, row.gl);
-            quad(prev.G, prev.W, row.G, row.W, [0.42, 0.45, 0.5], [0.42, 0.45, 0.5], 0, 0);
+            quad(prev.G, prev.W, row.G, row.W, [0.66, 0.70, 0.75], [0.66, 0.70, 0.75], 0, 0);
           }
           prev = row;
         }
@@ -319,7 +355,7 @@ export class View3D {
         const p = at(u), q = at(u + 1);
         if ((p.cut && q.cut) || p.gone || q.gone) continue;
         tri(p.W, p.C, q.W, p.rgb, p.gl); tri(p.C, q.C, q.W, q.rgb, q.gl); // coating ring
-        if (inner) { const G = [0.42, 0.45, 0.5]; tri(p.O, p.W, q.O, G, 0); tri(p.W, q.W, q.O, G, 0); } // wall ring
+        if (inner) { const G = [0.66, 0.70, 0.75]; tri(p.O, p.W, q.O, G, 0); tri(p.W, q.W, q.O, G, 0); } // wall ring
       }
     }
     this.nCap = kp.length / 3;
@@ -330,7 +366,7 @@ export class View3D {
       this._posW = pw; this._cutV = ccut.map((x) => (x > 0 ? 1 : 0));
     }
     this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut); this.upload('gloss', new Float32Array(n));
-    this.upload('cpos', cpos); this.upload('cnrm', nrm); this.upload('ccol', ccol); this.upload('ccut', ccut); this.upload('cgloss', cgl);
+    this.upload('cpos', cpos); this.upload('cnrm', nrm); this.upload('ccol', ccol); this.upload('ccut', ccut); this.upload('cgloss', cgl); this.upload('copa', cop);
     if (this.nCap) { this.upload('kpos', new Float32Array(kp)); this.upload('knrm', new Float32Array(kn)); this.upload('kcol', new Float32Array(kc)); this.upload('kgloss', new Float32Array(kg)); }
     this.markers = markers;
     this.render();
@@ -346,7 +382,7 @@ export class View3D {
     const list = (Array.isArray(bodies) ? bodies : [bodies]).filter(Boolean);
     if (!list.length || !geo || geo.flat || geo.surface !== 'inner') return;
     const { Ni, A, B, L } = geo, R = this.radial, [n0, n1] = this.cutN;
-    const tp = [], tn = [], tc = [], tg = [], tcut = [];
+    const tp = [], tn = [], tc = [], tg = [], tcut = [], to = [], td = [];
     for (const body of list) {
       let rgb = body.rgb, gloss = body.gloss ?? 1;
       if (!rgb && body.inBody) { // mean colour of the cells the body covers
@@ -355,6 +391,7 @@ export class View3D {
         if (!c) continue; rgb = rgb.map((x) => x / c); gloss /= c;
       }
       if (!rgb) rgb = [0.08, 0.30, 0.80];
+      const opa = body.opa ?? 1 - 0.25 * gloss; // a wet body is a deep, slightly see-through liquid
       const zBot = body.zBot || ((r2, u) => body.sBottom(u));
       const P = (u, v, s) => { const i = rowOfS(geo, s), X = u * body.dX - v * body.dY, Y = u * body.dY + v * body.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
       const n0v = tp.length / 3;
@@ -374,8 +411,12 @@ export class View3D {
           const t1 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]], t2 = [c[0] - d[0], c[1] - d[1], c[2] - d[2]];
           return norm(cross(t1, t2));
         }));
+        { // the centre vertex is shared by every sector: give it one normal (no star on the meniscus)
+          const c = [0, 0, 0]; for (const q of Nn[1]) for (let d = 0; d < 3; d++) c[d] += q[d];
+          const cn = norm(c); Nn[0] = Nn[0].map(() => cn);
+        }
         for (let k = 0; k < NR; k++) for (let m = 0; m < NM; m++) {
-          for (const [kk, mm] of [[k, m], [k + 1, m], [k + 1, m + 1], [k, m], [k + 1, m + 1], [k, m + 1]]) { tp.push(...G[kk][mm]); tn.push(...Nn[kk][mm]); }
+          for (const [kk, mm] of [[k, m], [k + 1, m], [k + 1, m + 1], [k, m], [k + 1, m + 1], [k, m + 1]]) { tp.push(...G[kk][mm]); tn.push(...Nn[kk][mm]); td.push(-1); }
         }
       }
       const nSurf = tp.length / 3;
@@ -383,22 +424,27 @@ export class View3D {
       if (this.cutaway) {
         const aT = A[Ni - 1], bT = B[Ni - 1], cb = body.cb;
         let eX = Math.cos(cb) / aT, eY = Math.sin(cb) / bT; const el = Math.hypot(eX, eY) || 1; eX /= el; eY /= el;
-        const NT = 64, NZ = 12, colm = [];
+        const NT = 64, NZ = 12, colm = [], depth = [];
         for (let q = 0; q <= NT; q++) {
           const tt = -1 + (2 * q) / NT, X = tt * eX, Y = tt * eY, u = X * body.dX + Y * body.dY, v = -X * body.dY + Y * body.dX, r2 = tt * tt, sb = zBot(r2, u), z = Math.min(body.zTop(r2, u), sb);
           const c = []; for (let r = 0; r <= NZ; r++) c.push(P(u, v, z + ((sb - z) * r) / NZ)); colm.push(c);
+          depth.push(Math.sqrt(Math.max(0, 1 - tt * tt))); // liquid behind the cut plane (bore half-depth)
         }
         for (let q = 0; q < NT; q++) for (let r = 0; r < NZ; r++) {
-          for (const [qq, rr] of [[q, r], [q + 1, r], [q + 1, r + 1], [q, r], [q + 1, r + 1], [q, r + 1]]) { tp.push(...colm[qq][rr]); tn.push(n0, n1, 0); }
+          for (const [qq, rr] of [[q, r], [q + 1, r], [q + 1, r + 1], [q, r], [q + 1, r + 1], [q, r + 1]]) { tp.push(...colm[qq][rr]); tn.push(n0, n1, 0); td.push(depth[qq]); }
         }
       }
       for (let v = n0v; v < tp.length / 3; v++) {
-        tc.push(rgb[0], rgb[1], rgb[2]); tg.push(gloss);
+        // Beer–Lambert look of the section: deeper (darker, more opaque) where more liquid lies
+        // behind the cut plane, lighter and clearer toward the walls
+        const dpt = td[v], sh = dpt < 0 ? 1 : 1.3 - 0.45 * dpt;
+        tc.push(Math.min(1, rgb[0] * sh), Math.min(1, rgb[1] * sh), Math.min(1, rgb[2] * sh)); tg.push(gloss);
+        to.push(dpt < 0 ? opa : Math.min(1, 0.86 + 0.14 * dpt)); // a section shows the bulk: nearly opaque
         tcut.push(v < nSurf ? tp[3 * v] * n0 + tp[3 * v + 1] * n1 : -1); // the plane section itself is never cut
       }
     }
     const n = tp.length / 3; if (!n) return;
-    this.upload('ppos', new Float32Array(tp)); this.upload('pnrm', new Float32Array(tn)); this.upload('pcol', new Float32Array(tc)); this.upload('pcut', new Float32Array(tcut)); this.upload('pgloss', new Float32Array(tg));
+    this.upload('ppos', new Float32Array(tp)); this.upload('pnrm', new Float32Array(tn)); this.upload('pcol', new Float32Array(tc)); this.upload('pcut', new Float32Array(tcut)); this.upload('pgloss', new Float32Array(tg)); this.upload('popa', new Float32Array(to));
     this.nPool = n;
     const pool = list.find((b) => b.Vpool !== undefined), held = list.find((b) => b.Vheld !== undefined);
     this.poolInfo = { V: pool ? pool.V : 0, Vpool: pool ? pool.Vpool : 0, Vfilm: pool ? pool.Vfilm : 0, height: pool ? pool.height : 0, hm: pool ? pool.hm : 0, Vheld: held ? held.V : 0, heldKind: held ? held.kind : null };
@@ -543,14 +589,23 @@ export class View3D {
     const bindA = (name, loc, size) => { if (loc < 0) return; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
     // main surface
     bindA('pos', this.loc.aPos, 3); bindA('nrm', this.loc.aNrm, 3); bindA('col', this.loc.aCol, 3); bindA('cut', this.loc.aCut, 1); bindA('gloss', this.loc.aGloss, 1);
-    gl.uniform1f(this.loc.uAlpha, 1); gl.uniform1f(this.loc.uFlat, 0);
+    const opaOff = () => { if (this.loc.aOpa >= 0) { gl.disableVertexAttribArray(this.loc.aOpa); gl.vertexAttrib1f(this.loc.aOpa, 1); } };
+    opaOff();
+    gl.uniform1f(this.loc.uAlpha, 1); gl.uniform1f(this.loc.uFlat, 0); gl.uniform1f(this.loc.uMat, 1);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
-    // coating layer (pulled toward the eye so a true-scale film still shows over the wall)
+    // coating layer (pulled toward the eye so a true-scale film still shows over the wall);
+    // blended so thin liquid films show the plastic through them (premultiplied output)
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform1f(this.loc.uMat, 2);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -4);
-    bindA('cpos', this.loc.aPos, 3); bindA('cnrm', this.loc.aNrm, 3); bindA('ccol', this.loc.aCol, 3); bindA('ccut', this.loc.aCut, 1); bindA('cgloss', this.loc.aGloss, 1);
-    gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
+    bindA('cpos', this.loc.aPos, 3); bindA('cnrm', this.loc.aNrm, 3); bindA('ccol', this.loc.aCol, 3); bindA('ccut', this.loc.aCut, 1); bindA('cgloss', this.loc.aGloss, 1); bindA('copa', this.loc.aOpa, 1);
+    // depth pre-pass so only the front-most coating layer is shaded (a see-through film on a tube
+    // would otherwise blend over its own far side in triangle order: saw-teeth at the silhouette)
+    gl.colorMask(false, false, false, false); gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0); gl.colorMask(true, true, true, true);
+    gl.depthFunc(gl.LEQUAL); gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0); gl.depthFunc(gl.LESS);
     gl.disable(gl.POLYGON_OFFSET_FILL);
+    opaOff();
     // caps on the cut plane: coating thickness band + wall band
     if (this.nCap) {
       bindA('kpos', this.loc.aPos, 3); bindA('knrm', this.loc.aNrm, 3); bindA('kcol', this.loc.aCol, 3); bindA('kgloss', this.loc.aGloss, 1);
@@ -560,10 +615,15 @@ export class View3D {
     // liquid pool body at the tip (in front of the coplanar film caps)
     if (this.nPool) {
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -8);
-      bindA('ppos', this.loc.aPos, 3); bindA('pnrm', this.loc.aNrm, 3); bindA('pcol', this.loc.aCol, 3); bindA('pcut', this.loc.aCut, 1); bindA('pgloss', this.loc.aGloss, 1);
-      gl.drawArrays(gl.TRIANGLES, 0, this.nPool);
+      bindA('ppos', this.loc.aPos, 3); bindA('pnrm', this.loc.aNrm, 3); bindA('pcol', this.loc.aCol, 3); bindA('pcut', this.loc.aCut, 1); bindA('pgloss', this.loc.aGloss, 1); bindA('popa', this.loc.aOpa, 1);
+      // depth pre-pass, then colour with LEQUAL: only the front-most layer of the see-through body
+      // is shaded (no order-dependent double layers where the meniscus overlaps itself)
+      gl.colorMask(false, false, false, false); gl.drawArrays(gl.TRIANGLES, 0, this.nPool); gl.colorMask(true, true, true, true);
+      gl.depthFunc(gl.LEQUAL); gl.drawArrays(gl.TRIANGLES, 0, this.nPool); gl.depthFunc(gl.LESS);
       gl.disable(gl.POLYGON_OFFSET_FILL);
+      opaOff();
     }
+    gl.disable(gl.BLEND);
     // lines (no depth test so markers are always visible)
     const lines = this.buildLines(performance.now());
     this.upload('lpos', lines.lp); this.upload('lcol', lines.lc);
@@ -580,7 +640,7 @@ export class View3D {
     }
     // ghost wall
     if (this.hasGhost) {
-      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.uniform1f(this.loc.uMat, 1);
       bindA('gpos', this.loc.aPos, 3); bindA('gnrm', this.loc.aNrm, 3); bindA('gcol', this.loc.aCol, 3); bindA('gcut', this.loc.aCut, 1);
       gl.disableVertexAttribArray(this.loc.aGloss); gl.vertexAttrib1f(this.loc.aGloss, 0);
       gl.uniform1f(this.loc.uAlpha, 0.18); gl.uniform1f(this.loc.uFlat, 0);
