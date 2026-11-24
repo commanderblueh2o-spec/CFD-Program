@@ -40,17 +40,22 @@ let k = 0;
 await page.addStyleTag({ content: '#navhelp, #toast { display: none !important; }' });
 for (const [name, i] of Object.entries(moments.at)) {
   if (i == null) continue;
-  for (const mode of ['oblique', 'tip']) {
+  // oblique / tip: cut open at the tip; closed: the uncut part seen through its wall (whole part
+  // and the tip), as with "Cut open" switched off
+  for (const mode of ['oblique', 'tip', 'closed', 'closedtip']) {
     await page.evaluate(([v, mode]) => {
       const el = document.querySelector('#frame'); el.value = Math.round((v / (window.coatsimState.result.frames.length - 1)) * el.max); el.dispatchEvent(new Event('input'));
-      const V = window.coatsimView; V.tipView();
-      if (mode === 'oblique') { V.yaw -= 0.6; V.pitch = 0.35; }
+      const V = window.coatsimView, closed = mode.startsWith('closed');
+      V.cutaway = !closed;
+      if (mode === 'closed') V.resetView(); else V.tipView();
+      if (mode === 'oblique' || mode === 'closedtip') { V.yaw -= 0.6; V.pitch = 0.35; }
       V.render();
     }, [i, mode]);
     await page.waitForTimeout(250);
     await view.screenshot({ path: `${out}/look-${k++}-${name}-${mode}.png` });
   }
 }
+await page.evaluate(() => { const c = document.querySelector('#cutaway'); window.coatsimView.cutaway = c ? c.checked : true; });
 const ms = await page.evaluate(() => { const V = window.coatsimView, t0 = performance.now(); const px = new Uint8Array(4); for (let i = 0; i < 20; i++) { V.render(); V.gl.readPixels(0, 0, 1, 1, V.gl.RGBA, V.gl.UNSIGNED_BYTE, px); } return (performance.now() - t0) / 20; });
 console.log('moments', JSON.stringify(moments), `render ${ms.toFixed(1)} ms/frame (software GL)`);
 console.log('errors:', errors.length ? errors.join('\n') : 'none');

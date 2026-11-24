@@ -18,9 +18,17 @@ void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vS=aPos.z; gl_Position=uM
 //    Schlick fresnel (F0 = 0.02 for water-like liquid). Opacity vO (thin liquid films pale and see-
 //    through, thick ones deep) rises toward 1 at grazing angles like a real liquid layer; the
 //    reflection is added on top so highlights stay bright on transparent liquid. vO < 0.02 = bare.
+//  uMat 3/4 = the plastic wall seen from outside (outer shell, cut-plane wall band), drawn in two
+//    passes so the bore and its liquid show through it with a tint: 3 multiplies what is behind by
+//    the transmittance T = tint^(path) × (1 − fresnel), with the path through the wall growing as
+//    1/cos at grazing view (so the silhouette edges look denser, as in a real moulded part); 4 adds
+//    the light scattered in the slightly hazy PP/PC (∝ 1 − T) and the studio reflection. uAlpha is
+//    the path through the plastic at normal view in wall thicknesses (1 shell, 4 cut face).
+//  uFace 1: keep only fragments whose normal faces the eye (an inner bore wall then shows its far
+//    side from inside and the near side is left to the translucent shell; the shell keeps its near side).
 const FS = `
 precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS; varying float vO;
-uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec; uniform float uMat;
+uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec; uniform float uMat; uniform float uFace;
 vec3 env(vec3 r, vec3 f){
   // soft studio around the camera: dim sky gradient, a large overhead softbox and two tall strip
   // lights left and right of the viewer (long vertical highlights on the bore and the liquid)
@@ -36,14 +44,24 @@ void main(){
   if (uFlat < 0.5 && vS < uSec) discard; // section slice: everything above it is hidden
   if (uFlat > 0.5) { gl_FragColor = vec4(vC, 1.0); return; }
   if (vO < 0.02) discard; // bare: the wall underneath shows
-  vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;
   vec3 v = normalize(uEye - vW);
+  if (uFace > 0.5 && dot(vN, v) < 0.0) discard;
+  vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;
   float ndv = clamp(abs(dot(n,v)), 0.0, 1.0);
   vec3 l1 = normalize(vec3(0.4,0.9,0.6));
   vec3 amb = mix(vec3(0.30,0.28,0.27), vec3(0.46,0.50,0.58), 0.5+0.5*n.y);
   vec3 r = reflect(-v, n), h = normalize(l1+v); vec3 E = env(r, v);
   float fr = pow(1.0-ndv, 5.0);
   vec3 c; vec3 sp; float a;
+  if (uMat > 2.5) {
+    float F = 0.04 + 0.96*fr, pl = min(uAlpha/max(ndv, 0.12), 8.0); // uAlpha: path in wall thicknesses at normal view
+    vec3 T = pow(vec3(0.84,0.88,0.92), vec3(pl)); // clear PP/PC with a faint cool tint
+    if (uMat < 3.5) { gl_FragColor = vec4(T*(1.0-F), 1.0); return; }
+    float hz = 1.0 - dot(T, vec3(0.333));
+    float wrap = clamp((dot(n,l1)+0.6)/1.6, 0.0, 1.0);
+    vec3 col = vC*(amb + 0.5*wrap)*hz*1.4 + E*F*0.55 + vec3(0.25*pow(max(dot(n,h),0.0), 60.0));
+    gl_FragColor = vec4(col, clamp(max(hz, max(col.r, max(col.g, col.b))), 0.0, 1.0)); return;
+  }
   if (uMat < 1.5) {
     float wrap = clamp((dot(n,l1)+0.6)/1.6, 0.0, 1.0);
     c = vC*(amb + 0.45*wrap + 0.22*ndv) * mix(1.0, 0.55, pow(1.0-ndv, 1.6));
@@ -84,13 +102,13 @@ export class View3D {
     this.prog = p;
     this.loc = {};
     for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss', 'aOpa']) this.loc[a] = gl.getAttribLocation(p, a);
-    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat']) this.loc[u] = gl.getUniformLocation(p, u);
+    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat', 'uFace']) this.loc[u] = gl.getUniformLocation(p, u);
     this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(), copa: gl.createBuffer(),
       kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
       ppos: gl.createBuffer(), pnrm: gl.createBuffer(), pcol: gl.createBuffer(), pcut: gl.createBuffer(), pgloss: gl.createBuffer(), popa: gl.createBuffer(),
-      lpos: gl.createBuffer(), lcol: gl.createBuffer() };
+      lpos: gl.createBuffer(), lcol: gl.createBuffer(), wpos: gl.createBuffer(), wnrm: gl.createBuffer(), wcol: gl.createBuffer() };
     this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.tgt = [0, 0, 0];
     this.cutaway = true; this.exag = 0; this.secZ = null; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
     // Fusion 360-style navigation: middle-drag pans, Shift + middle-drag orbits, the wheel
@@ -251,7 +269,7 @@ export class View3D {
         const nx = Nn[2 * v], ny = Nn[2 * v + 1];
         gp[3 * v] = (W[3 * v] - nx * wall) * R; gp[3 * v + 1] = (W[3 * v + 1] - ny * wall) * R; gp[3 * v + 2] = W[3 * v + 2];
         gn[3 * v] = -nx; gn[3 * v + 1] = -ny; gn[3 * v + 2] = 0;
-        gc[3 * v] = 0.55; gc[3 * v + 1] = 0.6; gc[3 * v + 2] = 0.68;
+        gc[3 * v] = 0.86; gc[3 * v + 1] = 0.89; gc[3 * v + 2] = 0.93;
         gcut[v] = gp[3 * v] * this.cutN[0] + gp[3 * v + 1] * this.cutN[1]; // signed distance to the cut plane
       }
       this.upload('gpos', gp); this.upload('gnrm', gn); this.upload('gcol', gc); this.upload('gcut', gcut);
@@ -306,6 +324,7 @@ export class View3D {
     };
     // caps on the cut plane: two generator lines where the plane meets the bore
     const kp = [], kn = [], kc = [], kg = [];
+    const wp = [], wn = []; // plastic wall band on the cut plane / section (drawn as see-through plastic)
     if (inner && this.cutaway) {
       const [n0, n1] = this.cutN, p0 = -n1, p1 = n0, wall = this.wallT || 0, SUB = this.SUB;
       for (const sgn of [1, -1]) {
@@ -329,7 +348,7 @@ export class View3D {
               for (const [Pq, rq, gq] of [[A, rgbA, gA], [B, rgbA, gA], [Cq, rgbB, gB], [B, rgbA, gA], [D, rgbB, gB], [Cq, rgbB, gB]]) { kp.push(...Pq); kn.push(n0, n1, 0); kc.push(...rq); kg.push(gq); }
             };
             if (prev.thick || row.thick) quad(prev.W, prev.C, row.W, row.C, prev.rgb, row.rgb, prev.gl, row.gl);
-            quad(prev.G, prev.W, row.G, row.W, [0.66, 0.70, 0.75], [0.66, 0.70, 0.75], 0, 0);
+            for (const Pq of [prev.G, prev.W, row.G, prev.W, row.W, row.G]) { wp.push(...Pq); wn.push(n0, n1, 0); }
           }
           prev = row;
         }
@@ -355,10 +374,11 @@ export class View3D {
         const p = at(u), q = at(u + 1);
         if ((p.cut && q.cut) || p.gone || q.gone) continue;
         tri(p.W, p.C, q.W, p.rgb, p.gl); tri(p.C, q.C, q.W, q.rgb, q.gl); // coating ring
-        if (inner) { const G = [0.66, 0.70, 0.75]; tri(p.O, p.W, q.O, G, 0); tri(p.W, q.W, q.O, G, 0); } // wall ring
+        if (inner) for (const Pq of [p.O, p.W, q.O, p.W, q.W, q.O]) { wp.push(...Pq); wn.push(0, 0, -1); } // wall ring
       }
     }
-    this.nCap = kp.length / 3;
+    this.nCap = kp.length / 3; this.nBand = wp.length / 3;
+    if (this.nBand) { this.upload('wpos', new Float32Array(wp)); this.upload('wnrm', new Float32Array(wn)); this.upload('wcol', new Float32Array(wp.length).fill(0.88)); }
     this.buildBodies(bodies, cc, cg);
     {
       const Mm = this.modelMatrix(), pw = new Float32Array(pos.length);
@@ -592,8 +612,12 @@ export class View3D {
     const opaOff = () => { if (this.loc.aOpa >= 0) { gl.disableVertexAttribArray(this.loc.aOpa); gl.vertexAttrib1f(this.loc.aOpa, 1); } };
     opaOff();
     gl.uniform1f(this.loc.uAlpha, 1); gl.uniform1f(this.loc.uFlat, 0); gl.uniform1f(this.loc.uMat, 1);
+    // a bore's wall: only the side seen from inside is drawn solid; where the wall is seen from
+    // outside the translucent shell below stands for it, so the liquid inside shows through
+    gl.uniform1f(this.loc.uFace, this.hasGhost ? 1 : 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
+    gl.uniform1f(this.loc.uFace, 0);
     // coating layer (pulled toward the eye so a true-scale film still shows over the wall);
     // blended so thin liquid films show the plastic through them (premultiplied output)
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -623,6 +647,28 @@ export class View3D {
       gl.disable(gl.POLYGON_OFFSET_FILL);
       opaOff();
     }
+    // translucent plastic: outer shell (near side) and the wall band on the cut plane / section,
+    // each in two passes (tinted transmission × what is behind, then scattered light + reflection)
+    if (this.hasGhost) {
+      gl.depthMask(false); gl.depthFunc(gl.LEQUAL);
+      gl.disableVertexAttribArray(this.loc.aGloss); gl.vertexAttrib1f(this.loc.aGloss, 0);
+      const shell = (draw) => {
+        gl.uniform1f(this.loc.uMat, 3); gl.blendFuncSeparate(gl.ZERO, gl.SRC_COLOR, gl.ZERO, gl.ONE); draw();
+        gl.uniform1f(this.loc.uMat, 4); gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE); draw();
+      };
+      if (this.nBand) {
+        bindA('wpos', this.loc.aPos, 3); bindA('wnrm', this.loc.aNrm, 3); bindA('wcol', this.loc.aCol, 3);
+        gl.disableVertexAttribArray(this.loc.aCut); gl.vertexAttrib1f(this.loc.aCut, -1);
+        // a cut face looks along the wall (long path through the plastic): milkier than the shell
+        gl.uniform1f(this.loc.uAlpha, 4); shell(() => gl.drawArrays(gl.TRIANGLES, 0, this.nBand)); gl.uniform1f(this.loc.uAlpha, 1);
+      }
+      bindA('gpos', this.loc.aPos, 3); bindA('gnrm', this.loc.aNrm, 3); bindA('gcol', this.loc.aCol, 3); bindA('gcut', this.loc.aCut, 1);
+      gl.uniform1f(this.loc.uFace, 1);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
+      shell(() => gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0));
+      gl.uniform1f(this.loc.uFace, 0);
+      gl.depthMask(true); gl.depthFunc(gl.LESS);
+    }
     gl.disable(gl.BLEND);
     // lines (no depth test so markers are always visible)
     const lines = this.buildLines(performance.now());
@@ -637,16 +683,6 @@ export class View3D {
       gl.uniform1f(this.loc.uFlat, 1);
       gl.drawArrays(gl.LINES, 0, this.nLines);
       gl.enable(gl.DEPTH_TEST);
-    }
-    // ghost wall
-    if (this.hasGhost) {
-      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.uniform1f(this.loc.uMat, 1);
-      bindA('gpos', this.loc.aPos, 3); bindA('gnrm', this.loc.aNrm, 3); bindA('gcol', this.loc.aCol, 3); bindA('gcut', this.loc.aCut, 1);
-      gl.disableVertexAttribArray(this.loc.aGloss); gl.vertexAttrib1f(this.loc.aGloss, 0);
-      gl.uniform1f(this.loc.uAlpha, 0.18); gl.uniform1f(this.loc.uFlat, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
-      gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
-      gl.depthMask(true); gl.disable(gl.BLEND);
     }
   }
 

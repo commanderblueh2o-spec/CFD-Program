@@ -105,6 +105,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 ## Done (v0.14.0) — realistic liquid and plastic shading (owner priority 2)
 - [x] Translucent, thickness-dependent liquid; fresnel studio reflections and highlights; volumetric liquid bodies; PP/PC plastic shading; glossy cured HA layer. See the owner-priority item below
 
+## Done (v0.15.0) — see-through cartridge plastic (owner priority 2)
+- [x] Translucent, tinted cartridge wall and cut-plane wall band; the liquid shows through the uncut part. See the owner-priority item below
+
 ## Done (v0.10.2) — saved setups get the bevel (owner feedback)
 - [x] The owner's browser restored a cartridge setup saved before the bevel existed (tipBevelDeg 0), so no bevel change showed. Saved and linked setups are now migrated on load: cartridges get the 35° face-to-axis bevel, and other bevels are converted from the old from-square angle
 - [x] Tip close-up is exactly side-on, so the cut shows as a straight line at its true angle
@@ -134,7 +137,8 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
   - [x] (v0.14.0) Cured HA drawn as a thin glossy layer (gloss 0.4 vs 0.1 for a dry film), so it keeps a soft sheen with the strip-light highlights.
   - [x] (v0.14.0) `tools/ui-look.mjs`: 3D-view-only screenshots (oblique and side-on at the tip, at fill / plug / tip pool / end), render time, and before/after with `COATSIM_HTML=<old build>`.
   - Finding: the extra passes and the heavier shader cost ~1.6× per frame in software GL (82 vs 50 ms at 1600×950 in headless SwiftShader); on any GPU this is well under a millisecond, so the animation stays smooth.
-  - [ ] Translucent cartridge wall in the full view (seeing the bore liquid through the uncut plastic, refraction-like tint), and a tinted, see-through cut-plane wall band.
+  - [x] (v0.15.0) Translucent cartridge wall in the full view and a see-through cut-plane wall band. The bore wall is drawn solid only where it is seen from inside; where it is seen from outside, the outer plastic surface is drawn in two passes: what is behind is multiplied by a tinted transmittance T = tint^(path) × (1 − fresnel), with the path through the wall growing as 1/cos toward the silhouette (denser edges, as in a moulded part), then the light scattered in the slightly hazy PP/PC (∝ 1 − T) and the studio reflection are added. The cut-plane and section wall bands use the same material with a 4× longer path (looking along the wall), so they are milky but tinted by what lies behind. With "Cut open" off, the fill, plugs, tip pool and film now show through the plastic. `tools/ui-look.mjs` also captures the uncut part (whole and tip).
+  - Finding: the old uncut view only looked see-through by accident: the coating and liquid bodies are drawn with a polygon offset toward the eye, so wherever they touched the wall they poked through the opaque near wall, unevenly (a white wall strip down one side of the taper). Render cost 78 → 86 ms/frame in software GL (two extra shell passes), negligible on a GPU.
   - [ ] Soft shadows or ambient occlusion in the bore.
   - [ ] Smoother film fronts and contact lines (a thin meniscus ridge where a draining film ends; the opacity already fades over one cell).
   - Keep it fast (the animation must stay smooth), and screenshot before and after (`tools/ui-look.mjs`).
