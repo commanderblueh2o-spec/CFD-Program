@@ -1115,6 +1115,7 @@ function init() {
   $('#exag').addEventListener('input', () => { state.exagTouched = true; updateViews(); });
   $('#section').addEventListener('input', () => { if (state.result) updateViews(); });
   $('#cutaway').addEventListener('change', () => { view3d.cutaway = $('#cutaway').checked; view3d.render(); });
+  $('#shadows').addEventListener('change', () => { view3d.shadows = $('#shadows').checked; view3d.render(); });
   $('#radial').addEventListener('change', () => { view3d.radialMode = $('#radial').value; if (state.result) { view3d.setGeometry(state.result.geometry); updateViews(); } else previewGeometry(true); });
   $('#resetView').addEventListener('click', () => view3d.resetView());
   $('#navHome').addEventListener('click', () => view3d.resetView());

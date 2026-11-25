@@ -7,9 +7,9 @@ import { coatingMesh, coatPoint } from '../core/drawn.js';
 import { rowOfS } from '../core/geometry.js';
 
 const VS = `
-attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss; attribute float aOpa;
-uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS; varying float vO;
-void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vS=aPos.z; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; vO=aOpa; gl_PointSize=3.0; }`;
+attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aCut; attribute float aGloss; attribute float aOpa; attribute vec2 aAB;
+uniform mat4 uMVP; uniform mat4 uModel; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying vec3 vB; varying float vO; varying vec2 vAB;
+void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vB=aPos; gl_Position=uMVP*w; vN=mat3(uModel)*aNrm; vC=aCol; vCut=aCut; vG=aGloss; vO=aOpa; vAB=aAB; gl_PointSize=3.0; }`;
 // Shading (all output premultiplied, blended with ONE, ONE_MINUS_SRC_ALPHA):
 //  uMat 1 = cartridge plastic: wrapped diffuse (light scattered in the translucent PP/PC),
 //    darker toward grazing view (longer path through the plastic), faint glossy reflection.
@@ -27,8 +27,29 @@ void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vS=aPos.z; gl_Position=uM
 //  uFace 1: keep only fragments whose normal faces the eye (an inner bore wall then shows its far
 //    side from inside and the near side is left to the translucent shell; the shell keeps its near side).
 const FS = `
-precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying float vS; varying float vO;
+precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying vec3 vB; varying float vO; varying vec2 vAB;
 uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec; uniform float uMat; uniform float uFace;
+uniform mat4 uModel; uniform vec2 uCutN; uniform vec4 uBev; uniform vec3 uBore; uniform float uOcc;
+// Light reaching a point inside a bore along direction d (body frame, drawn coordinates): the ray
+// is traced to where it meets the local elliptical bore wall (semi-axes vAB). It escapes (1) if it
+// leaves through the cut-open half, past either end, through the bevelled opening or above the
+// section slice; otherwise it passes through the plastic wall and keeps uBore.z of its light
+// (clear but hazy PP/PC, so shadows in the bore are soft and never black).
+float vis(vec3 p, vec3 d){
+  vec2 ia = 1.0/vAB; vec2 q = p.xy*ia, e = d.xy*ia;
+  float A = dot(e,e); if (A < 1e-10) return 1.0;
+  float B = dot(q,e), C = dot(q,q) - 1.0, D = B*B - A*C;
+  float t = (-B + sqrt(max(D, 0.0)))/A; if (t < 1e-7) return uBore.z;
+  vec3 h = p + t*d;
+  // margin past each opening (> 0 = the ray leaves the part there), blended over a fraction of
+  // the bore radius so the shadow edges are soft penumbrae instead of steps between the few rays
+  float w = 0.35*max(vAB.x, vAB.y);
+  float m = max(max(uSec, 0.0) - h.z, h.z - uBore.x);
+  if (uBev.w > 0.0) m = max(m, h.z - uBore.x + (uBev.z - dot(h.xy, uBev.xy)/uBore.y)*uBev.w);
+  if (uCut > 0.5) m = max(m, dot(h.xy, uCutN));
+  return mix(uBore.z, 1.0, smoothstep(-w, w, m));
+}
+vec3 toBody(vec3 w){ return normalize(vec3(dot(uModel[0].xyz, w), dot(uModel[1].xyz, w), dot(uModel[2].xyz, w))); }
 vec3 env(vec3 r, vec3 f){
   // soft studio around the camera: dim sky gradient, a large overhead softbox and two tall strip
   // lights left and right of the viewer (long vertical highlights on the bore and the liquid)
@@ -41,7 +62,7 @@ vec3 env(vec3 r, vec3 f){
 }
 void main(){
   if (uCut > 0.5 && vCut > 1e-7) discard;
-  if (uFlat < 0.5 && vS < uSec) discard; // section slice: everything above it is hidden
+  if (uFlat < 0.5 && vB.z < uSec) discard; // section slice: everything above it is hidden
   if (uFlat > 0.5) { gl_FragColor = vec4(vC, 1.0); return; }
   if (vO < 0.02) discard; // bare: the wall underneath shows
   vec3 v = normalize(uEye - vW);
@@ -52,6 +73,18 @@ void main(){
   vec3 amb = mix(vec3(0.30,0.28,0.27), vec3(0.46,0.50,0.58), 0.5+0.5*n.y);
   vec3 r = reflect(-v, n), h = normalize(l1+v); vec3 E = env(r, v);
   float fr = pow(1.0-ndv, 5.0);
+  // inside a bore: soft shadow of the key light (3 rays in a cone), ambient occlusion (4 rays over
+  // the hemisphere) and the reflection: a reflected ray that meets the bore wall shows the dim far
+  // wall instead of the studio
+  float sh = 1.0, ao = 1.0;
+  if (uOcc > 0.5 && vAB.x > 0.0 && uMat < 2.5) {
+    vec3 nb = toBody(n), lb = toBody(l1), t1 = normalize(cross(lb, abs(lb.z) < 0.9 ? vec3(0.0,0.0,1.0) : vec3(1.0,0.0,0.0))), t2 = cross(lb, t1);
+    sh = 0.5*vis(vB, lb) + 0.25*(vis(vB, normalize(lb + 0.12*t1)) + vis(vB, normalize(lb - 0.12*t1)));
+    vec3 a1 = normalize(cross(nb, abs(nb.z) < 0.9 ? vec3(0.0,0.0,1.0) : vec3(1.0,0.0,0.0))), a2 = cross(nb, a1);
+    ao = 0.25*(vis(vB, nb) + vis(vB, normalize(0.7*nb + 0.7*a1)) + vis(vB, normalize(0.7*nb - 0.35*a1 + 0.6*a2)) + vis(vB, normalize(0.7*nb - 0.35*a1 - 0.6*a2)));
+    float vr = vis(vB, toBody(r));
+    E = mix(vec3(0.20,0.22,0.25)*(0.4 + 0.6*ao), E, vr);
+  }
   vec3 c; vec3 sp; float a;
   if (uMat > 2.5) {
     float F = 0.04 + 0.96*fr, pl = min(uAlpha/max(ndv, 0.12), 8.0); // uAlpha: path in wall thicknesses at normal view
@@ -64,14 +97,14 @@ void main(){
   }
   if (uMat < 1.5) {
     float wrap = clamp((dot(n,l1)+0.6)/1.6, 0.0, 1.0);
-    c = vC*(amb + 0.45*wrap + 0.22*ndv) * mix(1.0, 0.55, pow(1.0-ndv, 1.6));
-    sp = vec3(0.16*pow(max(dot(n,h),0.0), 50.0)) + E*(0.10+0.9*fr)*0.45;
+    c = vC*(amb*ao + 0.45*wrap*sh + 0.22*ndv*ao) * mix(1.0, 0.55, pow(1.0-ndv, 1.6));
+    sp = vec3(0.16*sh*pow(max(dot(n,h),0.0), 50.0)) + E*(0.10+0.9*fr)*0.45;
     a = uAlpha;
   } else {
     float g = clamp(vG, 0.0, 1.0);
-    c = vC*(amb + 0.42*max(dot(n,l1),0.0) + 0.30*ndv);
+    c = vC*(amb*ao + 0.42*sh*max(dot(n,l1),0.0) + 0.30*ndv*ao);
     float F = 0.02 + 0.98*fr;
-    sp = vec3(pow(max(dot(n,h),0.0), 30.0+220.0*g)*(0.10+1.1*g)) + E*(0.03+0.5*F)*(0.15+1.2*g);
+    sp = vec3(sh*pow(max(dot(n,h),0.0), 30.0+220.0*g)*(0.10+1.1*g)) + E*(0.03+0.5*F)*(0.15+1.2*g);
     a = uAlpha*mix(min(vO,1.0), 1.0, F*g);
   }
   gl_FragColor = vec4(c*a + sp*uAlpha, a);
@@ -101,9 +134,9 @@ export class View3D {
     const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     this.prog = p;
     this.loc = {};
-    for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss', 'aOpa']) this.loc[a] = gl.getAttribLocation(p, a);
-    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat', 'uFace']) this.loc[u] = gl.getUniformLocation(p, u);
-    this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(),
+    for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss', 'aOpa', 'aAB']) this.loc[a] = gl.getAttribLocation(p, a);
+    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat', 'uFace', 'uCutN', 'uBev', 'uBore', 'uOcc']) this.loc[u] = gl.getUniformLocation(p, u);
+    this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(), ab: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(), copa: gl.createBuffer(),
       kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
@@ -261,6 +294,12 @@ export class View3D {
     this._camTilt = undefined;
     this.rmax = rmax;
     this.hasGhost = geo.surface === 'inner';
+    { // local bore semi-axes per render vertex (drawn scale) for the in-bore shadows / occlusion
+      const ab = new Float32Array(2 * rows * cols), occ = this.hasGhost && !geo.flat;
+      if (occ) for (let r = 0; r < rows; r++) { const i = this.rowI[r]; for (let u = 0; u < cols; u++) { ab[2 * (r * cols + u)] = geo.A[i] * this.radial; ab[2 * (r * cols + u) + 1] = (geo.B[i] || geo.A[i]) * this.radial; } }
+      this.occ = occ;
+      if (gl) this.upload('ab', ab);
+    }
     if (this.hasGhost) {
       const n = rows * cols, gp = new Float32Array(3 * n), gn = new Float32Array(3 * n), gc = new Float32Array(3 * n), gcut = new Float32Array(n);
       const wall = Math.max(0.15 * rmax, 0.2e-3), R = this.radial, W = M0.wall, Nn = M0.nrm;
@@ -606,9 +645,17 @@ export class View3D {
     gl.uniform3fv(this.loc.uEye, e2);
     gl.uniform1f(this.loc.uCut, this.cutaway ? 1 : 0);
     gl.uniform1f(this.loc.uSec, this.secZ != null ? this.secZ - 1e-7 : -1e9);
+    { // in-bore shadows and occlusion (see vis() in the shader)
+      const geo = this.geo, bv = geo.bevel, cb = bv ? (bv.clockDeg * Math.PI) / 180 : 0;
+      gl.uniform1f(this.loc.uOcc, this.occ && this.shadows !== false ? 1 : 0);
+      gl.uniform2f(this.loc.uCutN, this.cutN[0], this.cutN[1]);
+      gl.uniform4f(this.loc.uBev, Math.cos(cb), Math.sin(cb), bv ? bv.qmax : 0, bv && bv.deg > 0 && geo.surface === 'inner' ? Math.tan((bv.deg * Math.PI) / 180) : 0);
+      gl.uniform3f(this.loc.uBore, geo.L, this.radial, 0.72); // light kept through the clear PP/PC wall
+    }
     const bindA = (name, loc, size) => { if (loc < 0) return; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
     // main surface
     bindA('pos', this.loc.aPos, 3); bindA('nrm', this.loc.aNrm, 3); bindA('col', this.loc.aCol, 3); bindA('cut', this.loc.aCut, 1); bindA('gloss', this.loc.aGloss, 1);
+    bindA('ab', this.loc.aAB, 2);
     const opaOff = () => { if (this.loc.aOpa >= 0) { gl.disableVertexAttribArray(this.loc.aOpa); gl.vertexAttrib1f(this.loc.aOpa, 1); } };
     opaOff();
     gl.uniform1f(this.loc.uAlpha, 1); gl.uniform1f(this.loc.uFlat, 0); gl.uniform1f(this.loc.uMat, 1);
@@ -630,6 +677,7 @@ export class View3D {
     gl.depthFunc(gl.LEQUAL); gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0); gl.depthFunc(gl.LESS);
     gl.disable(gl.POLYGON_OFFSET_FILL);
     opaOff();
+    if (this.loc.aAB >= 0) { gl.disableVertexAttribArray(this.loc.aAB); gl.vertexAttrib2f(this.loc.aAB, 0, 0); } // no bore occlusion below
     // caps on the cut plane: coating thickness band + wall band
     if (this.nCap) {
       bindA('kpos', this.loc.aPos, 3); bindA('knrm', this.loc.aNrm, 3); bindA('kcol', this.loc.aCol, 3); bindA('kgloss', this.loc.aGloss, 1);

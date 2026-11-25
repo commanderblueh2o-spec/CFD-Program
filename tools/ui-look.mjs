@@ -57,7 +57,20 @@ for (const [name, i] of Object.entries(moments.at)) {
 }
 await page.evaluate(() => { const c = document.querySelector('#cutaway'); window.coatsimView.cutaway = c ? c.checked : true; });
 const ms = await page.evaluate(() => { const V = window.coatsimView, t0 = performance.now(); const px = new Uint8Array(4); for (let i = 0; i < 20; i++) { V.render(); V.gl.readPixels(0, 0, 1, 1, V.gl.RGBA, V.gl.UNSIGNED_BYTE, px); } return (performance.now() - t0) / 20; });
-console.log('moments', JSON.stringify(moments), `render ${ms.toFixed(1)} ms/frame (software GL)`);
+// bore shadows / occlusion: the same frame with the "Shadows in the bore" option off, for the
+// render cost and to check that the option changes the bore shading (and nothing breaks)
+const off = await page.evaluate(() => {
+  const V = window.coatsimView, cb = document.querySelector('#shadows');
+  const grab = () => { V.render(); const g = V.gl, w = g.drawingBufferWidth, h = g.drawingBufferHeight, px = new Uint8Array(w * h * 4); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, px); return px; };
+  const a = grab();
+  cb.checked = false; cb.dispatchEvent(new Event('change'));
+  const t0 = performance.now(); for (let i = 0; i < 20; i++) grab(); const ms = (performance.now() - t0) / 20;
+  const b = grab(); cb.checked = true; cb.dispatchEvent(new Event('change'));
+  let diff = 0, lit = 0, sa = 0, sb = 0;
+  for (let i = 0; i < a.length; i += 4) { const la = a[i] + a[i + 1] + a[i + 2], lb = b[i] + b[i + 1] + b[i + 2]; if (la + lb > 60) { lit++; sa += la; sb += lb; if (Math.abs(la - lb) > 6) diff++; } }
+  return { ms, changed: diff / Math.max(1, lit), ratio: sa / Math.max(1, sb) };
+});
+console.log('moments', JSON.stringify(moments), `render ${ms.toFixed(1)} ms/frame (software GL); shadows off ${off.ms.toFixed(1)} ms/frame; shadows change ${(100 * off.changed).toFixed(0)}% of the part's pixels, brightness ×${off.ratio.toFixed(2)}`);
 console.log('errors:', errors.length ? errors.join('\n') : 'none');
 await browser.close();
 process.exit(errors.length ? 1 : 0);
