@@ -4162,12 +4162,16 @@ void main(){ vec4 w = uModel*vec4(aPos,1.0); vW=w.xyz; vB=aPos; gl_Position=uMVP
 const FS = `
 precision highp float; varying vec3 vN; varying vec3 vC; varying float vCut; varying vec3 vW; varying float vG; varying vec3 vB; varying float vO; varying vec2 vAB;
 uniform float uCut; uniform float uAlpha; uniform vec3 uEye; uniform float uFlat; uniform float uSec; uniform float uMat; uniform float uFace;
-uniform mat4 uModel; uniform vec2 uCutN; uniform vec4 uBev; uniform vec3 uBore; uniform float uOcc;
+uniform mat4 uModel; uniform vec2 uCutN; uniform vec4 uBev; uniform vec3 uBore; uniform float uOcc; uniform vec4 uHeld;
 // Light reaching a point inside a bore along direction d (body frame, drawn coordinates): the ray
 // is traced to where it meets the local elliptical bore wall (semi-axes vAB). It escapes (1) if it
 // leaves through the cut-open half, past either end, through the bevelled opening or above the
 // section slice; otherwise it passes through the plastic wall and keeps uBore.z of its light
-// (clear but hazy PP/PC, so shadows in the bore are soft and never black).
+// (clear but hazy PP/PC, so shadows in the bore are soft and never black). Liquid bodies in the
+// bore (plugs, the filling column, the tip pool; uHeld = their volume-mean lower/upper levels,
+// two bodies) cast a shadow too: a ray whose path along the bore crosses a body passes through
+// the liquid and keeps HELD_T of its light (two refracting interfaces and some scattering).
+const float HELD_T = 0.55;
 float vis(vec3 p, vec3 d){
   vec2 ia = 1.0/vAB; vec2 q = p.xy*ia, e = d.xy*ia;
   float A = dot(e,e); if (A < 1e-10) return 1.0;
@@ -4180,7 +4184,14 @@ float vis(vec3 p, vec3 d){
   float m = max(max(uSec, 0.0) - h.z, h.z - uBore.x);
   if (uBev.w > 0.0) m = max(m, h.z - uBore.x + (uBev.z - dot(h.xy, uBev.xy)/uBore.y)*uBev.w);
   if (uCut > 0.5) m = max(m, dot(h.xy, uCutN));
-  return mix(uBore.z, 1.0, smoothstep(-w, w, m));
+  // the liquid the ray crosses: up to the wall, or (cut open) up to the cut plane, where the
+  // drawn body ends too
+  float tl = t, dn = dot(d.xy, uCutN);
+  if (uCut > 0.5 && dn > 1e-6) tl = clamp(-dot(p.xy, uCutN)/dn, 0.0, t);
+  float ze = p.z + tl*d.z, lo = min(p.z, ze), hi = max(p.z, ze), att = 1.0;
+  att *= mix(1.0, HELD_T, smoothstep(0.0, w, min(hi, uHeld.y) - max(lo, uHeld.x)));
+  att *= mix(1.0, HELD_T, smoothstep(0.0, w, min(hi, uHeld.w) - max(lo, uHeld.z)));
+  return mix(uBore.z, 1.0, smoothstep(-w, w, m))*att;
 }
 vec3 toBody(vec3 w){ return normalize(vec3(dot(uModel[0].xyz, w), dot(uModel[1].xyz, w), dot(uModel[2].xyz, w))); }
 vec3 env(vec3 r, vec3 f){
@@ -4268,12 +4279,12 @@ class View3D {
     this.prog = p;
     this.loc = {};
     for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss', 'aOpa', 'aAB']) this.loc[a] = gl.getAttribLocation(p, a);
-    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat', 'uFace', 'uCutN', 'uBev', 'uBore', 'uOcc']) this.loc[u] = gl.getUniformLocation(p, u);
+    for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat', 'uFace', 'uCutN', 'uBev', 'uBore', 'uOcc', 'uHeld']) this.loc[u] = gl.getUniformLocation(p, u);
     this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(), ab: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(), copa: gl.createBuffer(),
       kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
-      ppos: gl.createBuffer(), pnrm: gl.createBuffer(), pcol: gl.createBuffer(), pcut: gl.createBuffer(), pgloss: gl.createBuffer(), popa: gl.createBuffer(),
+      ppos: gl.createBuffer(), pab: gl.createBuffer(), pnrm: gl.createBuffer(), pcol: gl.createBuffer(), pcut: gl.createBuffer(), pgloss: gl.createBuffer(), popa: gl.createBuffer(),
       lpos: gl.createBuffer(), lcol: gl.createBuffer(), wpos: gl.createBuffer(), wnrm: gl.createBuffer(), wcol: gl.createBuffer() };
     this.yaw = -0.5; this.pitch = 0.5; this.dist = 2.6; this.tgt = [0, 0, 0];
     this.cutaway = true; this.exag = 0; this.secZ = null; this.tilt = 90; this.radialMode = 'auto'; this.radial = 1;
@@ -4569,12 +4580,12 @@ class View3D {
   // plus their section on the cut-open plane. Built in the unit disc of the local ellipse, so
   // the drawn body has the computed volume (the radius magnifier scales x and y only).
   buildBodies(bodies, cc, cg) {
-    this.nPool = 0; this.poolInfo = null;
+    this.nPool = 0; this.poolInfo = null; this.heldZ = [1, 0, 1, 0]; // no body: empty ranges
     const geo = this.geo;
     const list = (Array.isArray(bodies) ? bodies : [bodies]).filter(Boolean);
     if (!list.length || !geo || geo.flat || geo.surface !== 'inner') return;
     const { Ni, A, B, L } = geo, R = this.radial, [n0, n1] = this.cutN;
-    const tp = [], tn = [], tc = [], tg = [], tcut = [], to = [], td = [];
+    const tp = [], tn = [], tc = [], tg = [], tcut = [], to = [], td = [], tab = [], hz = [];
     for (const body of list) {
       let rgb = body.rgb, gloss = body.gloss ?? 1;
       if (!rgb && body.inBody) { // mean colour of the cells the body covers
@@ -4588,6 +4599,15 @@ class View3D {
       const P = (u, v, s) => { const i = rowOfS(geo, s), X = u * body.dX - v * body.dY, Y = u * body.dY + v * body.dX; return [A[i] * X * R, B[i] * Y * R, Math.min(L, s)]; };
       const n0v = tp.length / 3;
       const NR = 20, NM = 72;
+      { // volume-mean lower and upper levels of the body (area-weighted over the unit disc), for
+        // the shadow it casts along the bore (uHeld in the shader)
+        let wsum = 0, zt = 0, zb = 0;
+        for (let k = 0; k < 12; k++) for (let m = 0; m < 24; m++) {
+          const rho = (k + 0.5) / 12, r2 = rho * rho, u = rho * Math.cos((2 * Math.PI * m) / 24), sb = zBot(r2, u);
+          zt += rho * Math.min(body.zTop(r2, u), sb); zb += rho * sb; wsum += rho;
+        }
+        if (hz.length < 4 && wsum > 0) hz.push(Math.min(L, zt / wsum), Math.min(L, zb / wsum));
+      }
       for (const face of ['top', 'bottom']) {
         const G = [];
         for (let k = 0; k <= NR; k++) {
@@ -4627,6 +4647,8 @@ class View3D {
         }
       }
       for (let v = n0v; v < tp.length / 3; v++) {
+        // local bore semi-axes (drawn scale) so the body is shaded by the bore around it
+        const i = rowOfS(geo, Math.min(L, tp[3 * v + 2])); tab.push(A[i] * R, (B[i] || A[i]) * R);
         // Beer–Lambert look of the section: deeper (darker, more opaque) where more liquid lies
         // behind the cut plane, lighter and clearer toward the walls
         const dpt = td[v], sh = dpt < 0 ? 1 : 1.3 - 0.45 * dpt;
@@ -4636,6 +4658,7 @@ class View3D {
       }
     }
     const n = tp.length / 3; if (!n) return;
+    this.upload('pab', new Float32Array(tab)); for (let q = 0; q < hz.length; q++) this.heldZ[q] = hz[q];
     this.upload('ppos', new Float32Array(tp)); this.upload('pnrm', new Float32Array(tn)); this.upload('pcol', new Float32Array(tc)); this.upload('pcut', new Float32Array(tcut)); this.upload('pgloss', new Float32Array(tg)); this.upload('popa', new Float32Array(to));
     this.nPool = n;
     const pool = list.find((b) => b.Vpool !== undefined), held = list.find((b) => b.Vheld !== undefined);
@@ -4784,6 +4807,8 @@ class View3D {
       gl.uniform2f(this.loc.uCutN, this.cutN[0], this.cutN[1]);
       gl.uniform4f(this.loc.uBev, Math.cos(cb), Math.sin(cb), bv ? bv.qmax : 0, bv && bv.deg > 0 && geo.surface === 'inner' ? Math.tan((bv.deg * Math.PI) / 180) : 0);
       gl.uniform3f(this.loc.uBore, geo.L, this.radial, 0.72); // light kept through the clear PP/PC wall
+      const hz = this.occ ? this.heldZ || [1, 0, 1, 0] : [1, 0, 1, 0];
+      gl.uniform4f(this.loc.uHeld, hz[0], hz[1], hz[2], hz[3]);
     }
     const bindA = (name, loc, size) => { if (loc < 0) return; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf[name]); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
     // main surface
@@ -4820,6 +4845,9 @@ class View3D {
     // liquid pool body at the tip (in front of the coplanar film caps)
     if (this.nPool) {
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -8);
+      // shaded by the bore around it (shadow, occlusion), but not by its own shadow
+      if (this.occ) bindA('pab', this.loc.aAB, 2);
+      gl.uniform4f(this.loc.uHeld, 1, 0, 1, 0);
       bindA('ppos', this.loc.aPos, 3); bindA('pnrm', this.loc.aNrm, 3); bindA('pcol', this.loc.aCol, 3); bindA('pcut', this.loc.aCut, 1); bindA('pgloss', this.loc.aGloss, 1); bindA('popa', this.loc.aOpa, 1);
       // depth pre-pass, then colour with LEQUAL: only the front-most layer of the see-through body
       // is shaded (no order-dependent double layers where the meniscus overlaps itself)
@@ -4827,6 +4855,7 @@ class View3D {
       gl.depthFunc(gl.LEQUAL); gl.drawArrays(gl.TRIANGLES, 0, this.nPool); gl.depthFunc(gl.LESS);
       gl.disable(gl.POLYGON_OFFSET_FILL);
       opaOff();
+      if (this.loc.aAB >= 0) { gl.disableVertexAttribArray(this.loc.aAB); gl.vertexAttrib2f(this.loc.aAB, 0, 0); }
     }
     // translucent plastic: outer shell (near side) and the wall band on the cut plane / section,
     // each in two passes (tinted transmission × what is behind, then scattered light + reflection)
@@ -4887,7 +4916,7 @@ const {  } = (() => {
 
 
 
-const VERSION = '0.16.0';
+const VERSION = '0.17.0';
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, html = '') => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (html) e.innerHTML = html; return e; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
