@@ -195,6 +195,13 @@ kbd { background: var(--card-2); border: 1px solid var(--line); border-radius: 3
   .layout { grid-template-columns: 1fr; height: auto; }
   .center { height: 80vh; }
 }
+/* phones: the top bar wraps (preset picker on its own full-width row) so Run and the menu stay on screen */
+@media (max-width: 640px) {
+  .topbar { height: auto; flex-wrap: wrap; row-gap: 8px; padding: 8px 10px; position: sticky; top: 0; z-index: 20; }
+  select.preset { order: 10; flex: 1 1 100%; min-width: 0; max-width: none; margin-left: 0; }
+  .topbar .spacer { flex: 1; }
+  .topbar .progress { order: 11; flex: 1 1 100%; }
+}
 
 /* A/B comparison */
 .refbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
@@ -228,6 +235,8 @@ table.kv.diff td:last-child { white-space: nowrap; }
 .navhelp dd span { color: #6f7889; }
 .navhelp kbd { font: inherit; font-size: 10px; padding: 0 4px; border: 1px solid #3a4352; border-bottom-width: 2px; border-radius: 3px; background: #1a2029; color: #d6dce6; }
 #v3d canvas:focus { outline: none; }
+/* touch screens: the mouse-controls card would cover the 3D view (one finger orbits, two fingers pinch-zoom and pan); bigger Home / Tip / Fit buttons */
+@media (pointer: coarse) { #navhelp details { display: none; } .navbtn { min-width: 40px; min-height: 40px; font-size: 18px; } }
 </style>
 </head>
 <body>
@@ -4292,22 +4301,46 @@ class View3D {
     // zooms about the cursor, double-click middle fits. Left-drag orbit / right-drag pan stay
     // as fallbacks for trackpads.
     let drag = null;
+    // touch: one finger orbits (as left-drag); two fingers pinch-zoom about their midpoint and pan
+    const touches = new Map(); let pinch = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()], r = this.canvas.getBoundingClientRect();
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, r };
+    };
     this.canvas.style.touchAction = 'none';
     this.canvas.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); }); // no autoscroll
     this.canvas.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) { drag = null; pinch = pinchState(); this.canvas.setPointerCapture(e.pointerId); return; }
+        if (touches.size > 2) return;
+      }
       if (e.button === 1) e.preventDefault();
       drag = { x: e.clientX, y: e.clientY, b: e.button };
       this.canvas.setPointerCapture(e.pointerId);
       this.canvas.style.cursor = this._dragMode(e) === 'pan' ? 'grabbing' : 'move';
     });
     this.canvas.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && touches.size === 2) {
+          const q = pinchState();
+          this.panBy(q.mx - pinch.mx, q.my - pinch.my);
+          if (q.d > 10 && pinch.d > 10) this.zoomAt(pinch.d / q.d, q.mx - q.r.left - q.r.width / 2, q.my - q.r.top - q.r.height / 2);
+          else this.render();
+          pinch = q; return;
+        }
+      }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
       if (this._dragMode({ button: drag.b, shiftKey: e.shiftKey }) === 'pan') this.panBy(dx, dy);
       else { this.yaw -= dx * 0.008; this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008)); }
       this.render();
     });
-    const end = () => { drag = null; this.canvas.style.cursor = ''; };
+    const end = (e) => {
+      if (e && e.pointerType === 'touch') { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; if (touches.size) { drag = null; return; } }
+      drag = null; this.canvas.style.cursor = '';
+    };
     this.canvas.addEventListener('pointerup', end); this.canvas.addEventListener('pointercancel', end);
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     this.canvas.addEventListener('wheel', (e) => {
@@ -4916,7 +4949,7 @@ const {  } = (() => {
 
 
 
-const VERSION = '0.17.0';
+const VERSION = '0.17.1';
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, html = '') => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (html) e.innerHTML = html; return e; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

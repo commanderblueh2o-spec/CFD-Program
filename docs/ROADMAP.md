@@ -114,6 +114,11 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 ## Done (v0.17.0) — liquid bodies in the bore lighting (owner priority 2)
 - [x] Plugs, the filling column and the tip pool receive the bore's shadows and occlusion and cast a soft shadow along the bore; see the owner-priority item below
 
+## Done (v0.17.1) — works on a phone (owner question)
+- [x] On a phone the top bar overflowed and pushed ▶ Run and the ☰ menu off-screen. Below 640 px it now wraps (preset picker on its own full-width row) and stays pinned at the top while scrolling
+- [x] Touch control of the 3D view: one finger orbits, two fingers pinch-zoom about their midpoint and pan; the mouse-controls card is hidden on touch screens and the Home / Tip / Fit buttons are larger
+- Checked headless as an iPhone 13 (390 px): no horizontal scroll, Run reachable, a full SAICCS run finishes, results and findings readable, one-finger orbit and pinch zoom work, no console errors
+
 ## Done (v0.10.2) — saved setups get the bevel (owner feedback)
 - [x] The owner's browser restored a cartridge setup saved before the bevel existed (tipBevelDeg 0), so no bevel change showed. Saved and linked setups are now migrated on load: cartridges get the 35° face-to-axis bevel, and other bevels are converted from the old from-square angle
 - [x] Tip close-up is exactly side-on, so the cut shows as a straight line at its true angle

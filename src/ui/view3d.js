@@ -159,22 +159,46 @@ export class View3D {
     // zooms about the cursor, double-click middle fits. Left-drag orbit / right-drag pan stay
     // as fallbacks for trackpads.
     let drag = null;
+    // touch: one finger orbits (as left-drag); two fingers pinch-zoom about their midpoint and pan
+    const touches = new Map(); let pinch = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()], r = this.canvas.getBoundingClientRect();
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, r };
+    };
     this.canvas.style.touchAction = 'none';
     this.canvas.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); }); // no autoscroll
     this.canvas.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) { drag = null; pinch = pinchState(); this.canvas.setPointerCapture(e.pointerId); return; }
+        if (touches.size > 2) return;
+      }
       if (e.button === 1) e.preventDefault();
       drag = { x: e.clientX, y: e.clientY, b: e.button };
       this.canvas.setPointerCapture(e.pointerId);
       this.canvas.style.cursor = this._dragMode(e) === 'pan' ? 'grabbing' : 'move';
     });
     this.canvas.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && touches.size === 2) {
+          const q = pinchState();
+          this.panBy(q.mx - pinch.mx, q.my - pinch.my);
+          if (q.d > 10 && pinch.d > 10) this.zoomAt(pinch.d / q.d, q.mx - q.r.left - q.r.width / 2, q.my - q.r.top - q.r.height / 2);
+          else this.render();
+          pinch = q; return;
+        }
+      }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
       if (this._dragMode({ button: drag.b, shiftKey: e.shiftKey }) === 'pan') this.panBy(dx, dy);
       else { this.yaw -= dx * 0.008; this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008)); }
       this.render();
     });
-    const end = () => { drag = null; this.canvas.style.cursor = ''; };
+    const end = (e) => {
+      if (e && e.pointerType === 'touch') { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; if (touches.size) { drag = null; return; } }
+      drag = null; this.canvas.style.cursor = '';
+    };
     this.canvas.addEventListener('pointerup', end); this.canvas.addEventListener('pointercancel', end);
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     this.canvas.addEventListener('wheel', (e) => {

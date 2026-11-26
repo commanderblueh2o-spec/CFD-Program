@@ -188,6 +188,13 @@ kbd { background: var(--card-2); border: 1px solid var(--line); border-radius: 3
   .layout { grid-template-columns: 1fr; height: auto; }
   .center { height: 80vh; }
 }
+/* phones: the top bar wraps (preset picker on its own full-width row) so Run and the menu stay on screen */
+@media (max-width: 640px) {
+  .topbar { height: auto; flex-wrap: wrap; row-gap: 8px; padding: 8px 10px; position: sticky; top: 0; z-index: 20; }
+  select.preset { order: 10; flex: 1 1 100%; min-width: 0; max-width: none; margin-left: 0; }
+  .topbar .spacer { flex: 1; }
+  .topbar .progress { order: 11; flex: 1 1 100%; }
+}
 
 /* A/B comparison */
 .refbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
@@ -221,3 +228,5 @@ table.kv.diff td:last-child { white-space: nowrap; }
 .navhelp dd span { color: #6f7889; }
 .navhelp kbd { font: inherit; font-size: 10px; padding: 0 4px; border: 1px solid #3a4352; border-bottom-width: 2px; border-radius: 3px; background: #1a2029; color: #d6dce6; }
 #v3d canvas:focus { outline: none; }
+/* touch screens: the mouse-controls card would cover the 3D view (one finger orbits, two fingers pinch-zoom and pan); bigger Home / Tip / Fit buttons */
+@media (pointer: coarse) { #navhelp details { display: none; } .navbtn { min-width: 40px; min-height: 40px; font-size: 18px; } }
