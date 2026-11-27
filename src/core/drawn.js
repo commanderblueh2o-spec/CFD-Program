@@ -27,16 +27,41 @@ export function coatPoint(x, y, nx, ny, dd, fl, inner, flat = false) {
   return [x * (1 - t), y * (1 - t)];
 }
 
+// Monotone (Fritsch–Butland / PCHIP) node slopes of the drawn thickness along each cell column.
+// sAt: cell-centre positions; val(i): value of the column at cell row i. End slopes are zero (the
+// half cells at the ends are drawn flat), and so is the slope at any local extremum, so the
+// interpolant never overshoots: a film front or contact line is drawn as a smooth S between the
+// thick and the thin cell, without negative thickness or invented ridges.
+function pchipSlopes(sAt, n, val, out) {
+  for (let i = 0; i < n; i++) {
+    if (i === 0 || i === n - 1) { out[i] = 0; continue; }
+    const h0 = sAt[i] - sAt[i - 1], h1 = sAt[i + 1] - sAt[i];
+    const d0 = (val(i) - val(i - 1)) / h0, d1 = (val(i + 1) - val(i)) / h1;
+    if (d0 * d1 <= 0) { out[i] = 0; continue; }
+    const w1 = 2 * h1 + h0, w2 = h1 + 2 * h0;
+    out[i] = (w1 + w2) / (w1 / d0 + w2 / d1);
+  }
+}
+
 // geo: built or serialised geometry. d: per-cell drawn thickness (m, already magnified) or null.
-// fill: per-cell 0/1 (bore full of liquid) or null. Render rows sit at the cell centres plus one
-// row at each true end of the part carrying the end cell's value (on a flat coupon the columns
-// get the same two edge columns), so the drawn layer, linear between cell centres and constant
-// over the half cells at the ends, holds the same volume as Σ film × area. Returns body-frame
-// coordinates in metres (the view applies its radius magnifier to x and y afterwards).
+// fill: per-cell 0/1 (bore full of liquid) or null. Render rows sit at the cell centres, with
+// opts.rsub − 1 extra rows between neighbouring centres (default 3 render rows per cell), plus
+// one row at each true end of the part carrying the end cell's value (on a flat coupon the columns
+// get the same two edge columns). Along the part the thickness is a monotone cubic (PCHIP) through
+// the cell-centre values with zero slope at the end centres; over each segment a cubic Hermite
+// holds ds(d₀ + d₁)/2 + ds²(m₀ − m₁)/12 and the slope terms cancel between segments, so the drawn
+// layer holds the same volume as with straight lines between the centres (= Σ film × area), but
+// fronts and contact lines are smooth instead of kinked. Around the circumference values are
+// blended linearly over SUB render columns per cell. Returns body-frame coordinates in metres (the
+// view applies its radius magnifier to x and y afterwards); per render row the two cell rows it
+// lies between (rowI0, rowI1, rowT) and the interpolated semi-axes (rowA, rowB); per vertex the
+// drawn thickness and flood fraction (dd, fl) and four cells with bilinear weights (blend4, w4)
+// for colours.
 export function coatingMesh(geo, d, fill, opts = {}) {
   const { Ni, Nj, flat } = geo;
   const SUB = flat ? 1 : opts.sub || 4;
-  const cols = flat ? Nj + 2 : Nj * SUB + 1, rows = Ni + 2;
+  const RS = Ni > 1 ? Math.max(1, Math.round(opts.rsub || 3)) : 1;
+  const cols = flat ? Nj + 2 : Nj * SUB + 1, rows = Ni + 2 + (Ni - 1) * (RS - 1);
   const inner = geo.surface === 'inner' && !flat;
   const vm = geo.voidMask, ee = geo.edgeEnd;
   const lastRow = new Int32Array(Nj);
@@ -48,9 +73,19 @@ export function coatingMesh(geo, d, fill, opts = {}) {
     const j = Math.floor(u / SUB) % Nj, f = (u % SUB) / SUB, j2 = (j + 1) % Nj;
     cutS[u] = Math.min(geo.L, cutAtCell(j) * (1 - f) + cutAtCell(j2) * f);
   }
-  // render row → axial position and cell row
-  const rowZ = new Float64Array(rows), rowI = new Int32Array(rows);
-  for (let r = 0; r < rows; r++) { const i = Math.max(0, Math.min(Ni - 1, r - 1)); rowI[r] = i; rowZ[r] = r === 0 ? 0 : r === rows - 1 ? geo.L : geo.s[i]; }
+  // render row → axial position, the cell rows it lies between and the local semi-axes
+  const rowZ = new Float64Array(rows), rowI = new Int32Array(rows), rowI0 = new Int32Array(rows), rowI1 = new Int32Array(rows);
+  const rowT = new Float64Array(rows), rowA = new Float64Array(rows), rowB = new Float64Array(rows);
+  for (let r = 0; r < rows; r++) {
+    let i0, i1, t;
+    if (r === 0) { i0 = i1 = 0; t = 0; }
+    else if (r === rows - 1) { i0 = i1 = Ni - 1; t = 0; }
+    else { const q = r - 1, a = Math.min(Ni - 1, Math.floor(q / RS)); i0 = a; t = a === Ni - 1 ? 0 : (q - a * RS) / RS; i1 = t > 0 ? a + 1 : a; }
+    rowI0[r] = i0; rowI1[r] = i1; rowT[r] = t; rowI[r] = t < 0.5 ? i0 : i1;
+    rowZ[r] = r === 0 ? 0 : r === rows - 1 ? geo.L : geo.s[i0] * (1 - t) + geo.s[i1] * t;
+    rowA[r] = geo.A ? geo.A[i0] * (1 - t) + geo.A[i1] * t : 0;
+    rowB[r] = geo.B ? (geo.B[i0] || geo.A[i0]) * (1 - t) + (geo.B[i1] || geo.A[i1]) * t : rowA[r];
+  }
   // flat coupon: column → x and cell column
   let colX = null, colJ = null;
   if (flat) {
@@ -58,22 +93,41 @@ export function coatingMesh(geo, d, fill, opts = {}) {
     const x0 = geo.pos[0], x1 = Nj > 1 ? geo.pos[3] : x0 + 1e-3, hw = 0.5 * (x1 - x0);
     for (let u = 0; u < cols; u++) { const j = Math.max(0, Math.min(Nj - 1, u - 1)); colJ[u] = j; colX[u] = u === 0 ? x0 - hw : u === cols - 1 ? geo.pos[3 * (Nj - 1)] + hw : geo.pos[3 * j]; }
   }
+  const cellOf = (i, j) => (flat ? i : Math.min(i, lastRow[j])) * Nj + j;
+  // PCHIP slopes of the drawn thickness along every cell column (cells past a bevel cut repeat the
+  // last uncut cell, so the slope there is zero)
+  const slope = new Float64Array(geo.N || Ni * Nj);
+  if (d && RS > 1) {
+    const col = new Float64Array(Ni);
+    for (let j = 0; j < Nj; j++) { pchipSlopes(geo.s, Ni, (i) => d[cellOf(i, j)], col); for (let i = 0; i < Ni; i++) slope[i * Nj + j] = col[i]; }
+  }
+  const dAt = (r, j) => { // drawn thickness of cell column j at render row r (monotone cubic in s)
+    const i0 = rowI0[r], i1 = rowI1[r], t = rowT[r], a = d[cellOf(i0, j)];
+    if (t === 0) return a;
+    const b = d[cellOf(i1, j)], h = geo.s[i1] - geo.s[i0], t2 = t * t, t3 = t2 * t;
+    const v = (2 * t3 - 3 * t2 + 1) * a + (t3 - 2 * t2 + t) * h * slope[i0 * Nj + j] + (-2 * t3 + 3 * t2) * b + (t3 - t2) * h * slope[i1 * Nj + j];
+    return Math.max(0, v);
+  };
   const n = rows * cols, wall = new Float64Array(3 * n), coat = new Float64Array(3 * n), nrm = new Float64Array(2 * n);
-  const blend = new Int32Array(2 * n), bf = new Float32Array(n);
+  const blend4 = new Int32Array(4 * n), w4 = new Float32Array(4 * n), ddv = new Float64Array(n), flv = new Float64Array(n);
   for (let r = 0; r < rows; r++) {
-    const i = rowI[r], z = rowZ[r];
+    const i0 = rowI0[r], i1 = rowI1[r], t = rowT[r], z = rowZ[r];
     for (let u = 0; u < cols; u++) {
       const v = r * cols + u;
-      let k1, k2, f;
-      if (flat) { k1 = k2 = i * Nj + colJ[u]; f = 0; }
-      else { const jf = u / SUB, j = Math.floor(jf) % Nj, j2 = (j + 1) % Nj; f = jf - Math.floor(jf); k1 = Math.min(i, lastRow[j]) * Nj + j; k2 = Math.min(i, lastRow[j2]) * Nj + j2; }
-      blend[2 * v] = k1; blend[2 * v + 1] = k2; bf[v] = f;
-      const dd = d ? d[k1] * (1 - f) + d[k2] * f : 0, fl = fill ? fill[k1] * (1 - f) + fill[k2] * f : 0;
+      let j, j2, f;
+      if (flat) { j = j2 = colJ[u]; f = 0; }
+      else { const jf = u / SUB; j = Math.floor(jf) % Nj; j2 = (j + 1) % Nj; f = jf - Math.floor(jf); }
+      const c00 = cellOf(i0, j), c01 = cellOf(i0, j2), c10 = cellOf(i1, j), c11 = cellOf(i1, j2);
+      blend4[4 * v] = c00; blend4[4 * v + 1] = c01; blend4[4 * v + 2] = c10; blend4[4 * v + 3] = c11;
+      w4[4 * v] = (1 - f) * (1 - t); w4[4 * v + 1] = f * (1 - t); w4[4 * v + 2] = (1 - f) * t; w4[4 * v + 3] = f * t;
+      const dd = d ? dAt(r, j) * (1 - f) + (f > 0 ? dAt(r, j2) * f : 0) : 0;
+      const fl = fill ? (fill[c00] * (1 - f) + fill[c01] * f) * (1 - t) + (fill[c10] * (1 - f) + fill[c11] * f) * t : 0;
+      ddv[v] = dd; flv[v] = fl;
       const zz = Math.min(z, cutS[u]);
       let x, y, nx, ny;
-      if (flat) { const k = k1; x = colX[u]; y = geo.pos[3 * k + 1]; nx = geo.nrm[3 * k]; ny = geo.nrm[3 * k + 1]; }
+      if (flat) { const k = c00; x = colX[u]; y = geo.pos[3 * k + 1]; nx = geo.nrm[3 * k]; ny = geo.nrm[3 * k + 1]; }
       else {
-        const ph = geo.phi[0] + (u / SUB) * ((2 * Math.PI) / Nj), a = geo.A[i], b = geo.B[i], c = Math.cos(ph), sn = Math.sin(ph);
+        const ph = geo.phi[0] + (u / SUB) * ((2 * Math.PI) / Nj), a = rowA[r], b = rowB[r], c = Math.cos(ph), sn = Math.sin(ph);
         x = a * c; y = b * sn; nx = b * c; ny = a * sn; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
         if (inner) { nx = -nx; ny = -ny; }
       }
@@ -82,7 +136,7 @@ export function coatingMesh(geo, d, fill, opts = {}) {
       coat[3 * v] = C[0]; coat[3 * v + 1] = C[1]; coat[3 * v + 2] = zz;
     }
   }
-  return { Ni: rows, rows, Nj, cols, SUB, cutS, lastRow, rowZ, rowI, wall, coat, nrm, blend, bf, inner, flat };
+  return { Ni: rows, rows, Nj, cols, SUB, RS, cutS, lastRow, rowZ, rowI, rowI0, rowI1, rowT, rowA, rowB, wall, coat, nrm, blend4, w4, dd: ddv, fl: flv, inner, flat };
 }
 
 // signed volume of the tetrahedron (a, b, c, e) × 6

@@ -274,6 +274,51 @@ test('tip pool drawn as a meniscus body: volume matches the held pool (analytic 
   return out.join('; ');
 });
 
+test('film fronts and contact lines drawn smooth, monotone and to volume (PCHIP sub-rows)', () => {
+  // A draining film ending in a sharp front (60 µm → bare over one cell), a contact line on a bare
+  // band and a capillary ridge, on a round bore, an oval bore, a tube outside and a coupon.
+  const out = [];
+  const shape = (i, Ni) => (i < Ni * 0.4 ? 60e-6 : i < Ni * 0.4 + 1 ? 25e-6 : i < Ni * 0.6 ? 0 : i === Math.floor(Ni * 0.8) ? 40e-6 : 8e-6);
+  for (const [name, g] of [
+    ['round bore', { geometry: { type: 'catheter', length: 20, od: 2, id: 1.4 }, surface: 'inner', grid: { ns: 40, nphi: 16 } }],
+    ['oval bore', { geometry: { type: 'catheter', length: 20, od: 2, id: 1.4, ovality: 0.7 }, surface: 'inner', grid: { ns: 40, nphi: 16 } }],
+    ['tube outside', { geometry: { type: 'catheter', length: 20, od: 1, id: 0.6 }, surface: 'outer', grid: { ns: 40, nphi: 16 } }],
+    ['coupon', { geometry: { type: 'coupon', length: 20, width: 6 }, grid: { ns: 40, nphi: 8 } }],
+  ]) {
+    const geo = buildGeometry(g), film = new Float64Array(geo.N);
+    for (let k = 0; k < geo.N; k++) film[k] = shape(Math.floor(k / geo.Nj), geo.Ni);
+    let Vs = 0; for (let k = 0; k < geo.N; k++) Vs += film[k] * geo.area[k];
+    const lin = coatingMesh(geo, film, null, { rsub: 1 }), sm = coatingMesh(geo, film, null);
+    assert(sm.RS === 3 && sm.rows === geo.Ni + 2 + 2 * (geo.Ni - 1), 'three render rows per cell');
+    const eL = (meshVolume(lin) - Vs) / Vs, eS = (meshVolume(sm) - Vs) / Vs;
+    assert(Math.abs(eS) < 2e-3, `${name}: smooth layer volume off by ${(eS * 100).toFixed(3)}%`);
+    assert(Math.abs(eS - eL) < 5e-4, `${name}: smoothing changed the drawn volume by ${((eS - eL) * 100).toFixed(3)}%`);
+    // along one column: never negative, never outside the two neighbouring cell values (no
+    // overshoot, no invented ridge), equal to the cell value at every cell centre
+    const u = 0;
+    for (let r = 1; r < sm.rows - 1; r++) {
+      const v = r * sm.cols + u, i0 = sm.rowI0[r], i1 = sm.rowI1[r], a = film[i0 * geo.Nj], b = film[i1 * geo.Nj], dd = sm.dd[v];
+      assert(dd >= 0 && dd <= Math.max(a, b) + 1e-15 && dd >= Math.min(a, b) - 1e-15, `${name}: overshoot at row ${r}: ${dd} not in [${a}, ${b}]`);
+      if (sm.rowT[r] === 0) near(dd, a, 1e-12, `${name}: value at the cell centre`);
+    }
+    // kink at each cell centre: the slope change across the node of the drawn polyline. Linear
+    // segments jump by the full change of secant; the PCHIP curve is C1, so its polyline kink
+    // shrinks with the sub-row count (≈ 1/rsub of the curvature × ds) instead.
+    const kink = (M, R) => {
+      let w = 0;
+      for (let i = 1; i < geo.Ni - 1; i++) {
+        const r = 1 + i * R, d = (rr) => M.dd[rr * M.cols + u], z = M.rowZ;
+        w = Math.max(w, Math.abs((d(r + 1) - d(r)) / (z[r + 1] - z[r]) - (d(r) - d(r - 1)) / (z[r] - z[r - 1])));
+      }
+      return w;
+    };
+    const kL = kink(lin, 1), k3 = kink(sm, 3), k12 = kink(coatingMesh(geo, film, null, { rsub: 12 }), 12);
+    assert(k3 < 0.9 * kL && k12 < 0.3 * kL, `${name}: fronts still kinked (×${(k3 / kL).toFixed(2)} at 3 sub-rows, ×${(k12 / kL).toFixed(2)} at 12)`);
+    out.push(`${name} ${(eS * 100).toFixed(3)}% (linear ${(eL * 100).toFixed(3)}%), kink ×${(k3 / kL).toFixed(2)} (×${(k12 / kL).toFixed(2)} at 12 sub-rows)`);
+  }
+  return out.join('; ');
+});
+
 test('drawn coating volume: film layer, full bore and held liquid bodies hold the simulated volume', () => {
   const out = [];
   // 1) oval bore (b/a = 0.7) filled to the axis: a 128-sided polygon of the ellipse

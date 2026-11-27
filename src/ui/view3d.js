@@ -147,7 +147,7 @@ export class View3D {
     this.loc = {};
     for (const a of ['aPos', 'aNrm', 'aCol', 'aCut', 'aGloss', 'aOpa', 'aAB']) this.loc[a] = gl.getAttribLocation(p, a);
     for (const u of ['uMVP', 'uModel', 'uCut', 'uAlpha', 'uEye', 'uFlat', 'uSec', 'uMat', 'uFace', 'uCutN', 'uBev', 'uBore', 'uOcc', 'uHeld']) this.loc[u] = gl.getUniformLocation(p, u);
-    this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), gloss: gl.createBuffer(), ab: gl.createBuffer(),
+    this.buf = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), cut: gl.createBuffer(), idx: gl.createBuffer(), idxW: gl.createBuffer(), gloss: gl.createBuffer(), ab: gl.createBuffer(),
       gpos: gl.createBuffer(), gnrm: gl.createBuffer(), gcol: gl.createBuffer(), gcut: gl.createBuffer(),
       cpos: gl.createBuffer(), cnrm: gl.createBuffer(), ccol: gl.createBuffer(), ccut: gl.createBuffer(), cgloss: gl.createBuffer(), copa: gl.createBuffer(),
       kpos: gl.createBuffer(), knrm: gl.createBuffer(), kcol: gl.createBuffer(), kgloss: gl.createBuffer(),
@@ -313,12 +313,24 @@ export class View3D {
       idx.push(a, c, b, b, c, d);
     }
     this.nIdx = idx.length;
+    // The wall and the plastic shell are straight between cell centres, so they are drawn over the
+    // same vertices with only the cell-centre and end rows (the sub-rows between them carry the
+    // smooth coating only); this keeps their passes as cheap as before the sub-rows.
+    const idxW = [], wr = [];
+    for (let r = 0; r < rows; r++) if (M0.rowT[r] === 0) wr.push(r);
+    for (let q = 0; q < wr.length - 1; q++) for (let j = 0; j < cols - 1; j++) {
+      const a = wr[q] * cols + j, b = a + 1, c = wr[q + 1] * cols + j, d = c + 1;
+      idxW.push(a, c, b, b, c, d);
+    }
+    this.nIdxW = idxW.length;
     // Cut-open plane: normally the body +y half is removed. A bevelled bore is instead sliced
     // along the bevel's own plane (the half perpendicular to the bevel direction is removed),
     // so the whole slanted cut, long side to short side, shows in profile.
     const bvl = geo.bevel && geo.bevel.deg > 0 && geo.surface === 'inner';
     if (bvl) { const cb = (geo.bevel.clockDeg * Math.PI) / 180; this.cutN = [-Math.sin(cb), Math.cos(cb)]; } else this.cutN = [0, 1];
     const gl = this.gl; if (!gl) return;
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idxW);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idxW), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
     gl.getExtension('OES_element_index_uint');
@@ -331,7 +343,7 @@ export class View3D {
     this.hasGhost = geo.surface === 'inner';
     { // local bore semi-axes per render vertex (drawn scale) for the in-bore shadows / occlusion
       const ab = new Float32Array(2 * rows * cols), occ = this.hasGhost && !geo.flat;
-      if (occ) for (let r = 0; r < rows; r++) { const i = this.rowI[r]; for (let u = 0; u < cols; u++) { ab[2 * (r * cols + u)] = geo.A[i] * this.radial; ab[2 * (r * cols + u) + 1] = (geo.B[i] || geo.A[i]) * this.radial; } }
+      if (occ) for (let r = 0; r < rows; r++) for (let u = 0; u < cols; u++) { ab[2 * (r * cols + u)] = M0.rowA[r] * this.radial; ab[2 * (r * cols + u) + 1] = M0.rowB[r] * this.radial; }
       this.occ = occ;
       if (gl) this.upload('ab', ab);
     }
@@ -380,22 +392,40 @@ export class View3D {
     const M = coatingMesh(geo, cd, cf);
     const WALL = [0.80, 0.83, 0.86]; // translucent PP/PC plastic (shaded as plastic in the shader)
     for (let v = 0; v < n; v++) {
-      const k1 = M.blend[2 * v], k2 = M.blend[2 * v + 1], f = M.bf[v];
+      const B4 = M.blend4, w4 = M.w4, q = 4 * v;
       pos[3 * v] = M.wall[3 * v] * R; pos[3 * v + 1] = M.wall[3 * v + 1] * R; pos[3 * v + 2] = M.wall[3 * v + 2];
       nrm[3 * v] = M.nrm[2 * v]; nrm[3 * v + 1] = M.nrm[2 * v + 1]; nrm[3 * v + 2] = 0;
       for (let c = 0; c < 3; c++) col[3 * v + c] = WALL[c];
       cut[v] = inner ? pos[3 * v] * this.cutN[0] + pos[3 * v + 1] * this.cutN[1] : -1;
       cpos[3 * v] = M.coat[3 * v] * R; cpos[3 * v + 1] = M.coat[3 * v + 1] * R; cpos[3 * v + 2] = M.coat[3 * v + 2];
-      for (let c = 0; c < 3; c++) ccol[3 * v + c] = cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f;
-      cgl[v] = cg[k1] * (1 - f) + cg[k2] * f;
-      cop[v] = co[k1] * (1 - f) + co[k2] * f;
+      let r0 = 0, g0 = 0, b0 = 0, gs = 0, os = 0;
+      for (let m = 0; m < 4; m++) { const k = B4[q + m], w = w4[q + m]; if (!w) continue; r0 += cc[3 * k] * w; g0 += cc[3 * k + 1] * w; b0 += cc[3 * k + 2] * w; gs += cg[k] * w; os += co[k] * w; }
+      ccol[3 * v] = r0; ccol[3 * v + 1] = g0; ccol[3 * v + 2] = b0; cgl[v] = gs; cop[v] = os;
       ccut[v] = inner ? cpos[3 * v] * this.cutN[0] + cpos[3 * v + 1] * this.cutN[1] : -1;
     }
-    const blendAt = (i, jf) => {
-      const j = Math.floor(jf) % Nj, f = jf - Math.floor(jf), j2 = (j + 1) % Nj;
-      const k1 = Math.min(i, this.lastRow[j]) * Nj + j, k2 = Math.min(i, this.lastRow[j2]) * Nj + j2;
-      return { k1, k2, f };
-    };
+    // Coating normals from the drawn coating surface itself (central differences along and
+    // around the part, in view coordinates), so a film front, a contact line or a thick ridge is
+    // lit as the slope it is drawn with instead of as the flat wall under it. Where the surface
+    // is degenerate (rows clamped onto a bevel cut, a bore flooded to the axis) or the difference
+    // normal turns far from the wall's, the wall normal is kept.
+    const cn = new Float32Array(3 * n), tube = !geo.flat;
+    for (let r = 0; r < rows; r++) for (let u = 0; u < cols; u++) {
+      const v = r * cols + u, wx = nrm[3 * v], wy = nrm[3 * v + 1], wz = nrm[3 * v + 2];
+      cn[3 * v] = wx; cn[3 * v + 1] = wy; cn[3 * v + 2] = wz;
+      if (M.dd[v] <= 0 || M.fl[v] > 0.5) continue;
+      const ra = r > 0 ? r - 1 : r, rb = r < rows - 1 ? r + 1 : r;
+      const ua = u > 0 ? u - 1 : tube ? cols - 2 : u, ub = u < cols - 1 ? u + 1 : tube ? 1 : u;
+      const P = (rr, uu, c) => cpos[3 * (rr * cols + uu) + c];
+      const tz = [0, 1, 2].map((c) => P(rb, u, c) - P(ra, u, c)), tu = [0, 1, 2].map((c) => P(r, ub, c) - P(r, ua, c));
+      let nx = tu[1] * tz[2] - tu[2] * tz[1], ny = tu[2] * tz[0] - tu[0] * tz[2], nz = tu[0] * tz[1] - tu[1] * tz[0];
+      const nl = Math.hypot(nx, ny, nz), lt = Math.hypot(...tz) * Math.hypot(...tu);
+      if (!(nl > 1e-6 * lt) || lt === 0) continue;
+      nx /= nl; ny /= nl; nz /= nl;
+      let dp = nx * wx + ny * wy + nz * wz;
+      if (dp < 0) { nx = -nx; ny = -ny; nz = -nz; dp = -dp; }
+      if (dp < 0.3) continue;
+      cn[3 * v] = nx; cn[3 * v + 1] = ny; cn[3 * v + 2] = nz;
+    }
     // caps on the cut plane: two generator lines where the plane meets the bore
     const kp = [], kn = [], kc = [], kg = [];
     const wp = [], wn = []; // plastic wall band on the cut plane / section (drawn as see-through plastic)
@@ -404,18 +434,18 @@ export class View3D {
       for (const sgn of [1, -1]) {
         let prev = null;
         for (let r = 0; r < rows; r++) {
-          const i = this.rowI[r], a = geo.A[i], b = geo.B[i];
+          const a = M.rowA[r], b = M.rowB[r];
           const ph = Math.atan2((sgn * p1) / b, (sgn * p0) / a);
           const x = a * Math.cos(ph), y = b * Math.sin(ph);
           let nx = b * Math.cos(ph), ny = a * Math.sin(ph); const nl = Math.hypot(nx, ny) || 1; nx = -nx / nl; ny = -ny / nl; // into the bore
           const jf = ((((ph - geo.phi[0]) / (2 * Math.PI)) * Nj) % Nj + Nj) % Nj;
-          const { k1, k2, f } = blendAt(i, jf);
-          const d = cd[k1] * (1 - f) + cd[k2] * f, fl = cf[k1] * (1 - f) + cf[k2] * f;
           const u = jf * SUB, u0 = Math.floor(u) % cols, u1 = Math.min(cols - 1, u0 + 1), fu = u - Math.floor(u);
+          const v0 = r * cols + u0, v1 = r * cols + u1;
+          const d = M.dd[v0] * (1 - fu) + M.dd[v1] * fu, fl = M.fl[v0] * (1 - fu) + M.fl[v1] * fu;
           const z = Math.min(this.rowZ[r], this.cutS[u0] * (1 - fu) + this.cutS[u1] * fu);
           const C = coatPoint(x, y, nx, ny, d, fl, true);
-          const rgb = [0, 1, 2].map((c) => cc[3 * k1 + c] * (1 - f) + cc[3 * k2 + c] * f);
-          const gl = cg[k1] * (1 - f) + cg[k2] * f;
+          const rgb = [0, 1, 2].map((c) => ccol[3 * v0 + c] * (1 - fu) + ccol[3 * v1 + c] * fu);
+          const gl = cgl[v0] * (1 - fu) + cgl[v1] * fu;
           const row = { W: [x * R, y * R, z], C: [C[0] * R, C[1] * R, z], G: [(x - nx * wall) * R, (y - ny * wall) * R, z], rgb, gl, thick: d > 0 || fl > 0.5 };
           if (prev) {
             const quad = (A, B, Cq, D, rgbA, rgbB, gA, gB) => { // A,B on row i-1; Cq,D on row i
@@ -460,7 +490,7 @@ export class View3D {
       this._posW = pw; this._cutV = ccut.map((x) => (x > 0 ? 1 : 0));
     }
     this.upload('pos', pos); this.upload('nrm', nrm); this.upload('col', col); this.upload('cut', cut); this.upload('gloss', new Float32Array(n));
-    this.upload('cpos', cpos); this.upload('cnrm', nrm); this.upload('ccol', ccol); this.upload('ccut', ccut); this.upload('cgloss', cgl); this.upload('copa', cop);
+    this.upload('cpos', cpos); this.upload('cnrm', cn); this.upload('ccol', ccol); this.upload('ccut', ccut); this.upload('cgloss', cgl); this.upload('copa', cop);
     if (this.nCap) { this.upload('kpos', new Float32Array(kp)); this.upload('knrm', new Float32Array(kn)); this.upload('kcol', new Float32Array(kc)); this.upload('kgloss', new Float32Array(kg)); }
     this.markers = markers;
     this.render();
@@ -711,8 +741,9 @@ export class View3D {
     // a bore's wall: only the side seen from inside is drawn solid; where the wall is seen from
     // outside the translucent shell below stands for it, so the liquid inside shows through
     gl.uniform1f(this.loc.uFace, this.hasGhost ? 1 : 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idxW);
+    gl.drawElements(gl.TRIANGLES, this.nIdxW, gl.UNSIGNED_INT, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
-    gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0);
     gl.uniform1f(this.loc.uFace, 0);
     // coating layer (pulled toward the eye so a true-scale film still shows over the wall);
     // blended so thin liquid films show the plastic through them (premultiplied output)
@@ -765,8 +796,9 @@ export class View3D {
       }
       bindA('gpos', this.loc.aPos, 3); bindA('gnrm', this.loc.aNrm, 3); bindA('gcol', this.loc.aCol, 3); bindA('gcut', this.loc.aCut, 1);
       gl.uniform1f(this.loc.uFace, 1);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idxW);
+      shell(() => gl.drawElements(gl.TRIANGLES, this.nIdxW, gl.UNSIGNED_INT, 0));
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.idx);
-      shell(() => gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_INT, 0));
       gl.uniform1f(this.loc.uFace, 0);
       gl.depthMask(true); gl.depthFunc(gl.LESS);
     }
