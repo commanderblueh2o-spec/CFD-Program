@@ -19,7 +19,7 @@ export const STAGE_DEFAULTS = {
   dip: { speed: 2, mode: 'constant', speedEnd: 1, speed2: 1.5, switch1Pct: 50, switch2Pct: 80, immersionMm: 1e9, dwell: 5, drainAfter: 30, tempC: 25, tilt: 0, ambientAir: 0 },
   spray: { nozzles: 1, flowMlMin: 2, transferEff: 0.7, standoffMm: 40, coneDeg: 30, traverseMmS: 20, passes: 4, startMm: 0, endMm: 1e9, clockDeg: 90, inFlightEvapPct: 20, lanceSigmaMm: 2, tempC: 25, tilt: 90, ambientAir: 0, drainAfter: 10 },
   drip: { mode: 'drops', lines: 1, pumpUlS: 5, pumpVolumeUl: 15, dropUl: 5, count: 3, interval: 2, startMm: 5, endMm: 5, clockDeg: null, beadUlS: 2, needleMmS: 5, tempC: 25, tilt: 90, ambientAir: 0, drainAfter: 20 },
-  fill: { fillFrom: 'start', primeS: 5, fillUlS: 20, dwellS: 30, withdrawUlS: 20, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, ambientAir: 0 },
+  fill: { fillFrom: 'start', primeS: 5, fillMlMin: 1.2, dwellS: 30, withdrawMlMin: 1.2, fillLevelMm: 0, airTime: 5, tempC: 25, tilt: 0, ambientAir: 0 },
   vacuum: { pressureKpa: 5, fillLengthMm: 1e9, fromEnd: 'start', direction: 'through', maxSpeedMmS: 0, airTime: 10, tempC: 25, tilt: 90, ambientAir: 0 },
   airflow: { duration: 20, nozzleSpeed: 0, airFlowScfh: 20, nozzleDiaMm: 2, captureFrac: 0.2, angleDeg: 0, offsetMm: 0, fromEnd: 'start', airTempC: 25, crossJetScfh: 0, crossJetDiaMm: 1.5, crossJetSpeed: 0, crossJetEnd: 'end', crossJetReachMm: 1.5, crossJetAngleDeg: 0, tempC: 25, tilt: 90, ambientAir: 0 },
   dwell: { duration: 60, tempC: 25, tilt: 90, ambientAir: 0 },
@@ -31,8 +31,17 @@ export const STAGE_DEFAULTS = {
 export function defaultTilt(type, geometry) { return geometry && geometry.type === 'iol_cartridge' ? 0 : (STAGE_DEFAULTS[type] || {}).tilt ?? 90; }
 // Parts never rotate (SAICCS cartridges and the other fixtures are stationary), so any
 // rpm left in an old saved setup is ignored, and a cartridge is always upright.
+// pump rate in mL/min → µL/s
+export function mlMinToUlS(q) { return ((q || 0) * 1000) / 60; }
+
 export function withDefaults(stage, geometry) {
   const st = { ...STAGE_DEFAULTS[stage.type], tilt: defaultTilt(stage.type, geometry), ...stage, rpm: 0 };
+  // SAICCS peristaltic pumps are set in mL/min (0–10 mL/min on the machine); setups saved before
+  // v0.19 gave the fill-stage rates in µL/s (1 mL/min = 16.67 µL/s)
+  if (stage.type === 'fill') for (const [ml, ul] of [['fillMlMin', 'fillUlS'], ['withdrawMlMin', 'withdrawUlS']]) {
+    if (stage[ml] == null && stage[ul] != null) st[ml] = (stage[ul] * 60) / 1000;
+    delete st[ul];
+  }
   if (geometry && geometry.type === 'iol_cartridge') st.tilt = 0;
   return st;
 }
@@ -665,11 +674,12 @@ STAGES.fill = {
     const lvl = Math.min(Math.max(st.fillLevelMm || 0, 0) * 1e-3, geo.L * 0.95);
     const top = fromStart ? lvl : geo.L - lvl;
     const V = fromStart ? ctx.cumA(geo.L) - ctx.cumA(top) : ctx.cumA(top);
-    const fillT = (V * 1e9) / Math.max(st.fillUlS, 1e-6);
-    const wdT = (V * 1e9) / Math.max(st.withdrawUlS, 1e-6);
+    const fillUlS = mlMinToUlS(st.fillMlMin), wdUlS = mlMinToUlS(st.withdrawMlMin);
+    const fillT = (V * 1e9) / Math.max(fillUlS, 1e-6);
+    const wdT = (V * 1e9) / Math.max(wdUlS, 1e-6);
     ctx._fill = { fromStart, top, V, primeT: st.primeS || 0, fillT, wdT, phase: 'prime', plug: null };
-    fs.stats.deposited += V + (st.primeS || 0) * st.fillUlS * 1e-9; // primed liquid passes through
-    fs.stats.dripped += (st.primeS || 0) * st.fillUlS * 1e-9;
+    fs.stats.deposited += V + (st.primeS || 0) * fillUlS * 1e-9; // primed liquid passes through
+    fs.stats.dripped += (st.primeS || 0) * fillUlS * 1e-9;
     return { duration: ctx._fill.primeT + fillT + st.dwellS + wdT * 3 + (st.airTime || 0), dynamic: true };
   },
   hook(ctx, st, tl) {
@@ -715,7 +725,7 @@ STAGES.fill = {
     if (!F.plug) {
       F.phase = 'withdraw';
       F.plug = new Plug(ctx, F.top, F.fromStart ? 1 : -1, F.V);
-      F.plug.flowQ = st.withdrawUlS * 1e-9;
+      F.plug.flowQ = mlMinToUlS(st.withdrawMlMin) * 1e-9;
       F.plug.maxSpeed = 0;
       for (let k = 0; k < geo.N; k++) if (fs.mask[k] === 1) fs.mask[k] = 0;
     }

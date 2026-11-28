@@ -1,5 +1,5 @@
 import { test, assert, near, run } from './harness.mjs';
-import { simulate, makeContext } from '../src/core/processes.js';
+import { simulate, makeContext, withDefaults, mlMinToUlS } from '../src/core/processes.js';
 import { brethertonFilm, dipFilmOuter, viscosity } from '../src/core/physics.js';
 import { COATINGS } from '../src/core/materials.js';
 import { getPreset } from '../src/core/presets.js';
@@ -252,6 +252,29 @@ test('blow-off jets aligned with the bevel spare the bevel-face film; misaligned
   const a = simulate(mk(0)), b = simulate(mk(40));
   assert(b.metrics.wet.mean < 0.9 * a.metrics.wet.mean, `misaligned should thin the bevel film (${b.metrics.wet.mean.toFixed(1)} vs ${a.metrics.wet.mean.toFixed(1)} µm)`);
   return `bevel-zone film ${a.metrics.wet.mean.toFixed(1)} µm aligned vs ${b.metrics.wet.mean.toFixed(1)} µm at 40° misalignment`;
+});
+
+test('fill pump rates in mL/min (SAICCS 0–10 mL/min): old µL/s setups convert; film follows Bretherton–Aussillous–Quéré up to 10 mL/min', () => {
+  const base = (stage) => ({
+    geometry: { type: 'catheter', length: 30, od: 3, id: 2 }, surface: 'inner', substrate: 'glass', coating: 'silicone_oil_350', coatingOverrides: oil,
+    grid: { ns: 60, nphi: 16 }, stages: [{ type: 'fill', fillFrom: 'start', primeS: 2, dwellS: 5, airTime: 0, tilt: 0, ...stage }], metrics: { zone: [3, 27] },
+  });
+  // 1) an old setup in µL/s and the same rates in mL/min give the same run
+  const a = simulate(base({ fillUlS: 20, withdrawUlS: 10 })), b = simulate(base({ fillMlMin: 1.2, withdrawMlMin: 0.6 }));
+  near(a.metrics.wet.mean, b.metrics.wet.mean, 1e-12, 'µL/s vs mL/min');
+  const w = withDefaults({ type: 'fill', withdrawUlS: 50 }, { type: 'iol_cartridge' });
+  near(w.withdrawMlMin, 3, 1e-12, '50 µL/s = 3 mL/min'); assert(w.withdrawUlS === undefined && w.fillMlMin === 1.2, 'defaults in mL/min');
+  // 2) at the top of the SAICCS range the meniscus is fast (Ca ~ 0.1–1) and the film follows the
+  //    saturating Bretherton/Aussillous–Quéré law h/R = 1.34Ca^⅔/(1 + 2.5·1.34Ca^⅔)
+  const out = [];
+  for (const q of [1, 10]) {
+    const r = simulate(base({ fillMlMin: 10, withdrawMlMin: q })), U = (mlMinToUlS(q) * 1e-9) / (Math.PI * 1e-6);
+    const gam = (COATINGS.silicone_oil_350.d + COATINGS.silicone_oil_350.p) * 1e-3, hB = brethertonFilm(1e-3, 0.1, U, gam);
+    assert(r.metrics.coverage > 0.999, 'whole bore coated');
+    near(r.metrics.wet.mean * 1e-6, hB, 0.15, `film at ${q} mL/min`);
+    out.push(`${q} mL/min: Ca ${(0.1 * U / gam).toFixed(3)}, film ${r.metrics.wet.mean.toFixed(1)} µm vs ${(hB * 1e6).toFixed(1)} µm`);
+  }
+  return out.join('; ');
 });
 
 test('fill, dwell & withdraw: pump-set meniscus speed gives the Bretherton film everywhere', () => {

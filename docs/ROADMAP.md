@@ -119,6 +119,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
 - [x] Touch control of the 3D view: one finger orbits, two fingers pinch-zoom about their midpoint and pan; the mouse-controls card is hidden on touch screens and the Home / Tip / Fit buttons are larger
 - Checked headless as an iPhone 13 (390 px): no horizontal scroll, Run reachable, a full SAICCS run finishes, results and findings readable, one-finger orbit and pinch zoom work, no console errors
 
+## Done (v0.19.0) — pump rates in mL/min (owner data)
+- [x] Fill and withdraw pump rates in mL/min across the SAICCS 0–10 mL/min range; old setups converted; withdraw-rate finding. See "Next"
+
 ## Done (v0.18.0) — smooth film fronts and contact lines (owner priority 2)
 - [x] Monotone cubic film along the part on three render rows per cell, lit with the drawn surface's normals, volume unchanged; see the owner-priority item below. Both owner priorities are now complete
 
@@ -161,7 +164,9 @@ Finding (SAICCS heated preset): lowering the HA viscosity from 300 to ~96 mPa·s
   - Finding: on the SAICCS presets the film varies smoothly over cells, so the full-part and tip views change by < 0.05% of pixels (the coating was already well resolved there); the gain shows on close-ups of sharp fronts and beads. The every-frame drawn-volume check is unchanged on the heated preset (worst −0.17%) and better on the lumen dip (0.37% → −0.11%: the draining column's film edge). Render cost in software GL ~180 → ~220–240 ms/frame (thin sub-row triangles in the two coating passes); negligible on a GPU.
   - Keep it fast (the animation must stay smooth), and screenshot before and after (`tools/ui-look.mjs`).
 - [x] Confirmed by the owner: the withdraw pump restarts after the dwell and drains the cartridge before heated airflow/cure (as modelled)
-- [ ] Get typical fill/withdraw pump rates from the owner
+- [x] (v0.19.0) Fill/withdraw pump rates from the owner: the SAICCS peristaltic pumps run at 0–10 mL/min. The fill stage now takes its rates in mL/min (sliders 0.1–10 mL/min, log; field up to 30), default 1.2 mL/min (= the old 20 µL/s, so results are unchanged). Setups saved in µL/s are converted on load and in the solver's stage defaults. Tests: old µL/s and new mL/min setups give identical runs; at 1 and 10 mL/min (Ca 0.025 and 0.25) the film follows the saturating Bretherton/Aussillous–Quéré law (88 vs 90 µm; 200 vs 229 µm, the thick film already draining under gravity while the meniscus recedes).
+  - Finding (SAICCS heated preset, withdraw rate across the owner's range): 0.3 / 0.6 / 1.2 / 2.5 / 5 / 10 mL/min → dry film 0.83 / 1.18 / 1.27 / 1.28 / 1.28 / 1.29 µm, CoV 22 / 40 / 37 / 36 / 35 / 35%, coverage 100%, cure 77 → 71%. Above ~1 mL/min the dry film stops depending on the withdraw rate: the deposited wet film (~100 µm in the nozzle at 1.2 mL/min, ~185 µm at 10) is thicker than what gravity drainage leaves before the HA sets (Jeffreys, h ≈ √(μx/ρgt) ≈ 100 µm after a minute), so every fast withdraw drains to the same film. Below ~0.6 mL/min the deposit is thinner than that limit and the withdraw rate becomes the thickness and uniformity lever (0.3 mL/min: −35% film, CoV 22%). The fill rate only sets the fill time (the film is laid down by the withdraw).
+- [ ] Ask the owner which fill/withdraw rates the SAICCS normally runs (and the coating volume per cartridge) to set the preset defaults
 - [x] Make the lumen dip column drainage / tip pooling less sensitive to tiny parameter changes (see v0.6 robustness note). Fixed by the v0.13.0 solids transport: the sensitivity came from spurious solids at the pooled tip, not from the drainage itself
 
 ## Done (v0.5) — wall excess and tip pooling (owner observation)

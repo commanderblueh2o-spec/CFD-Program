@@ -239,7 +239,7 @@ function stageSummary(st) {
     case 'spray': return `${s.flowMlMin} mL/min × ${s.passes}`;
     case 'drip': return s.mode === 'pump' ? `${s.pumpVolumeUl} µL @ ${s.pumpUlS} µL/s` : s.mode === 'bead' ? `${s.lines > 1 ? s.lines + ' × ' : ''}${s.beadUlS} µL/s` : `${s.count} × ${s.dropUl} µL`;
     case 'vacuum': return `${s.pressureKpa} kPa`;
-    case 'fill': return `dwell ${s.dwellS} s · out ${s.withdrawUlS} µL/s`;
+    case 'fill': { const q = (x) => String(+(+x).toPrecision(3)); return `in ${q(s.fillMlMin)} · dwell ${s.dwellS} s · out ${q(s.withdrawMlMin)} mL/min`; }
     case 'airflow': return [s.airFlowScfh > 0 ? `${s.airFlowScfh} SCFH${s.airTempC > 30 ? ' @ ' + s.airTempC + ' °C' : ''}` : '', jetScfh(s) > 0 && s.crossJetEnd !== 'none' ? `jets ${fmt(jetScfh(s))} SCFH` : '', `${s.duration} s`].filter(Boolean).join(' · ');
     case 'dwell': return `${s.duration} s`;
     case 'cure': return s.mode === 'uv' ? `UV ${s.uvIntensity} mW/cm² · ${s.duration} s` : `${s.tempC} °C · ${fmt(s.duration / 60)} min`;
@@ -583,7 +583,7 @@ function activityOf(fr, st) {
       if (tl < (st.primeS || 0)) bits.push('Priming: coating pumped in and pulled through the tip by the withdraw pump');
       else if (F.nozzle !== undefined) bits.push('Withdraw pump stopped — cartridge filling');
       else if (!F.speed) bits.push(`Dwell: cartridge full, held by back-pressure (${st.dwellS} s)`);
-      else bits.push(`Withdrawing at ${st.withdrawUlS} µL/s — meniscus ${fmt(F.speed * 1e3)} mm/s`);
+      else bits.push(`Withdrawing at ${String(+(+st.withdrawMlMin).toPrecision(3))} mL/min — meniscus ${fmt(F.speed * 1e3)} mm/s`);
       break;
     }
     case 'vacuum': if (fr.aux.air) { fx.push({ kind: 'air', speed: fr.aux.air, dir: st.direction === 'back' ? -1 : 1, hot: false }); bits.push(`Vacuum drawing air through (${fmt(fr.aux.airScfh ?? 0)} SCFH)`); } else bits.push(`Vacuum pulling the liquid out${fr.aux.speed ? ` at ${fmt(fr.aux.speed * 1e3)} mm/s` : ''}`); break;
@@ -1075,6 +1075,11 @@ let view3d, heatmap, chAxial, chCirc, chThick, chCure, chTemp, chVisc, swA, swB,
 // gets the standard 35° bevel (face to axis) with its long side on the floor, and any other
 // bevel is converted to the face-to-axis angle.
 function migrateSpec(spec) {
+  // fill-stage pump rates: µL/s before v0.19, mL/min (the SAICCS pump setting) since
+  for (const st of spec.stages || []) if (st.type === 'fill') for (const [ml, ul] of [['fillMlMin', 'fillUlS'], ['withdrawMlMin', 'withdrawUlS']]) {
+    if (st[ml] == null && st[ul] != null) st[ml] = +((st[ul] * 60) / 1000).toPrecision(4);
+    delete st[ul];
+  }
   if (spec.bevelConv === 2 || !spec.geometry) return;
   const g = spec.geometry;
   if (g.type === 'iol_cartridge') { g.tipBevelDeg = 35; g.bevelClockDeg = g.bevelClockDeg ?? 270; }
