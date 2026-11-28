@@ -12,7 +12,8 @@
 // explicit for gravity/shear advection, evaporation and sources; adaptive step size.
 
 import { PentaSolver } from './linalg.js';
-import { viscosity, evaporationRate, cureRate, disjoining, disjoiningCoeff } from './physics.js';
+import { viscosity, viscosityAt, evaporationRate, cureRate, disjoining, disjoiningCoeff, T_REF } from './physics.js';
+import { GAS_R } from './materials.js';
 
 export class FilmSolver {
   constructor(geo, coat, opts = {}) {
@@ -118,9 +119,16 @@ export class FilmSolver {
     const N = geo.N;
     let vmax = 0;
     this.uS.fill(0); this.uP.fill(0);
+    // Arrhenius factor mu0·exp(Ea/R (1/T − 1/Tref)) per cell, recomputed only where the film
+    // temperature changed since the last call (it is constant over most steps)
+    if (!this._muT || this._muT.length !== N || this._muC !== c || this._muK !== c.mu0 + '|' + c.EaMu) {
+      this._muT = new Float64Array(N); this._muTT = new Float64Array(N).fill(NaN); this._muC = c; this._muK = c.mu0 + '|' + c.EaMu;
+    }
+    const muT = this._muT, muTT = this._muTT, aMu = (c.EaMu * 1000) / GAS_R;
     for (let k = 0; k < N; k++) {
-      const phi = m[k] / h[k];
-      mu[k] = viscosity(c, phi, this.alpha[k], Tf[k]);
+      const phi = m[k] / h[k], T = Tf[k];
+      if (T !== muTT[k]) { muTT[k] = T; muT[k] = c.mu0 * Math.exp(aMu * (1 / T - 1 / T_REF)); }
+      mu[k] = viscosityAt(c, muT[k], phi, this.alpha[k]);
       M[k] = (h[k] * h[k] * h[k]) / (3 * mu[k]);
     }
     // pressure
@@ -204,53 +212,59 @@ export class FilmSolver {
 
   // Assemble and solve one implicit line operator (I - dt J) x = r in place.
   // idx: cell indices along the line; cl: Laplacian face conductances (face f between f and f+1)
+  // Written without closures or per-entry dispatch (it was ~40% of the run time): the capillary
+  // pressure stencil P_k = Pm_k x_k-1 + P0_k x_k + Pp_k x_k+1 is precomputed per cell, and every
+  // band entry is added to its band directly, in the same order and with the same arithmetic as
+  // before, so the results are bit-identical.
   _lineSolve(idx, n, periodic, cl, gm, gd, ua, Aa, r, solver) {
     const a = this.la, b = this.lb, c = this.lc, d = this.ld, e = this.le;
-    const gam = this.gamma, dt = this.dt;
+    const gam = this.gamma, dt = this.dt, mask = this.mask;
     a.fill(0, 0, n); b.fill(0, 0, n); c.fill(0, 0, n); d.fill(0, 0, n); e.fill(0, 0, n);
-    const has = (f) => periodic || (f >= 0 && f < n - 1);
-    // P_k = sum_{o=-1..1} pc(k,o) x_{k+o}
-    const pc = (k, o) => {
-      const fl = k - 1, fr = k; // left face index (k-1|k), right face (k|k+1)
-      const clL = has(fl) ? cl[periodic ? (fl + n) % n : fl] : 0, clR = has(fr) ? cl[periodic ? (fr + n) % n : fr] : 0;
-      if (o === -1) return (-gam / Aa[k]) * clL;
-      if (o === 1) return (-gam / Aa[k]) * clR;
-      return (gam / Aa[k]) * (clL + clR);
-    };
-    const add = (row, col, val) => {
-      let off = col - row;
-      if (periodic) { if (off > 2) off -= n; if (off < -2) off += n; }
-      switch (off) {
-        case -2: a[row] += val; break; case -1: b[row] += val; break; case 0: c[row] += val; break;
-        case 1: d[row] += val; break; case 2: e[row] += val; break; default: break;
-      }
-    };
+    if (!this._pm || this._pm.length < this.la.length) {
+      const L = this.la.length; this._pm = new Float64Array(L); this._p0 = new Float64Array(L); this._pp = new Float64Array(L);
+    }
+    const Pm = this._pm, P0 = this._p0, Pp = this._pp;
+    // pressure stencil of each cell (faces missing at the ends of an open line carry 0)
+    for (let k = 0; k < n; k++) {
+      const clL = periodic ? cl[k === 0 ? n - 1 : k - 1] : k > 0 ? cl[k - 1] : 0;
+      const clR = periodic || k < n - 1 ? cl[k] : 0;
+      Pm[k] = (-gam / Aa[k]) * clL; Pp[k] = (-gam / Aa[k]) * clR; P0[k] = (gam / Aa[k]) * (clL + clR);
+    }
     for (let k = 0; k < n; k++) {
       c[k] += 1;
-      if (this.mask[idx[k]]) { r[k] = 0; continue; }
+      if (mask[idx[k]]) { r[k] = 0; continue; }
+      const s = -dt / Aa[k];
       // Inflow through each face of cell k: gm (P_kn - P_k) + gd (x_kn - x_k);
       // (J x)_k = sum over faces / A_k ; matrix row gets -dt * J.
-      for (let side = -1; side <= 1; side += 2) {
-        const f = side === 1 ? k : k - 1;
-        if (!has(f)) continue;
-        const fi = periodic ? (f + n) % n : f;
-        const kn = periodic ? (k + side + n) % n : k + side;
-        const s = -dt / Aa[k];
-        const g1 = gm[fi], g2 = gd[fi];
-        for (let o = -1; o <= 1; o++) {
-          const col = periodic ? (kn + o + n) % n : kn + o;
-          if (col >= 0 && col < n) add(k, col, s * g1 * pc(kn, o));
-          const col2 = periodic ? (k + o + n) % n : k + o;
-          if (col2 >= 0 && col2 < n) add(k, col2, -s * g1 * pc(k, o));
-        }
-        add(k, kn, s * g2);
-        add(k, k, -s * g2);
-        // implicit upwind advection: face velocity u (positive = from k toward k+1 along the line)
+      // left face (k-1|k), neighbour kn = k-1: its stencil reaches offsets -2..0
+      if (periodic || k > 0) {
+        const fi = k === 0 ? n - 1 : k - 1, kn = k === 0 ? n - 1 : k - 1;
+        const sg = s * gm[fi], g2 = gd[fi];
+        if (periodic || kn - 1 >= 0) a[k] += sg * Pm[kn];
+        b[k] += -sg * Pm[k];
+        b[k] += sg * P0[kn];
+        c[k] += -sg * P0[k];
+        c[k] += sg * Pp[kn];
+        if (periodic || k + 1 < n) d[k] += -sg * Pp[k];
+        b[k] += s * g2;
+        c[k] += -s * g2;
         const u = ua[fi];
-        if (u !== 0) {
-          const inflow = side === 1 ? -u : u; // >0 means flow into cell k through this face
-          if (inflow > 0) add(k, kn, s * inflow); else add(k, k, s * inflow);
-        }
+        if (u !== 0) { if (u > 0) b[k] += s * u; else c[k] += s * u; }
+      }
+      // right face (k|k+1), neighbour kn = k+1: offsets 0..+2
+      if (periodic || k < n - 1) {
+        const fi = k, kn = k === n - 1 ? 0 : k + 1;
+        const sg = s * gm[fi], g2 = gd[fi];
+        c[k] += sg * Pm[kn];
+        if (periodic || k - 1 >= 0) b[k] += -sg * Pm[k];
+        d[k] += sg * P0[kn];
+        c[k] += -sg * P0[k];
+        if (periodic || kn + 1 < n) e[k] += sg * Pp[kn];
+        d[k] += -sg * Pp[k];
+        d[k] += s * g2;
+        c[k] += -s * g2;
+        const u = ua[fi];
+        if (u !== 0) { const inflow = -u; if (inflow > 0) d[k] += s * inflow; else c[k] += s * inflow; }
       }
     }
     if (periodic) solver.solveCyclic(a, b, c, d, e, r); else solver.solve(a, b, c, d, e, r);

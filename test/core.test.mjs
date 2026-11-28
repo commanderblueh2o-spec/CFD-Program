@@ -7,7 +7,7 @@ import { FilmSolver } from '../src/core/film.js';
 import { coatingMesh, meshVolume, heldBody } from '../src/core/drawn.js';
 import { diffSpecs, resampleField, diffStats } from '../src/core/compare.js';
 import { COATINGS, SUBSTRATES, contactAngleOWRK } from '../src/core/materials.js';
-import { levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength, dipSpeedAt, dipWithdrawTable, dipPositionAt } from '../src/core/physics.js';
+import { viscosity, levelingRate, jeffreysDrainage, dipFilmOuter, brethertonFilm, capillaryLength, dipSpeedAt, dipWithdrawTable, dipPositionAt } from '../src/core/physics.js';
 
 function rnd(seed) { let s = seed; return () => ((s = (s * 16807) % 2147483647) / 2147483647); }
 
@@ -449,6 +449,101 @@ test('axial grid refined toward a bevelled tip: smooth rows, exact bore volume, 
   const Vd = meshVolume(coatingMesh(geo, film, null));
   const e = near(Vd, Vf, 5e-3, 'drawn film volume (refined)');
   return `Ni ${g3.Ni}, ${nb} rows over the bevel, max row ratio ${ratio.toFixed(3)}; drawn film ${(e * 100).toFixed(2)}% off`;
+});
+
+// The closure-based line assembly used up to v0.19.0, kept as the reference for the faster one.
+function refLineSolve(self, idx, n, periodic, cl, gm, gd, ua, Aa, r, solver) {
+  const a = new Float64Array(n), b = new Float64Array(n), c = new Float64Array(n), d = new Float64Array(n), e = new Float64Array(n);
+  const gam = self.gamma, dt = self.dt;
+  const has = (f) => periodic || (f >= 0 && f < n - 1);
+  const pc = (k, o) => {
+    const fl = k - 1, fr = k;
+    const clL = has(fl) ? cl[periodic ? (fl + n) % n : fl] : 0, clR = has(fr) ? cl[periodic ? (fr + n) % n : fr] : 0;
+    if (o === -1) return (-gam / Aa[k]) * clL;
+    if (o === 1) return (-gam / Aa[k]) * clR;
+    return (gam / Aa[k]) * (clL + clR);
+  };
+  const add = (row, col, val) => {
+    let off = col - row;
+    if (periodic) { if (off > 2) off -= n; if (off < -2) off += n; }
+    switch (off) {
+      case -2: a[row] += val; break; case -1: b[row] += val; break; case 0: c[row] += val; break;
+      case 1: d[row] += val; break; case 2: e[row] += val; break; default: break;
+    }
+  };
+  for (let k = 0; k < n; k++) {
+    c[k] += 1;
+    if (self.mask[idx[k]]) { r[k] = 0; continue; }
+    for (let side = -1; side <= 1; side += 2) {
+      const f = side === 1 ? k : k - 1;
+      if (!has(f)) continue;
+      const fi = periodic ? (f + n) % n : f;
+      const kn = periodic ? (k + side + n) % n : k + side;
+      const s = -dt / Aa[k];
+      const g1 = gm[fi], g2 = gd[fi];
+      for (let o = -1; o <= 1; o++) {
+        const col = periodic ? (kn + o + n) % n : kn + o;
+        if (col >= 0 && col < n) add(k, col, s * g1 * pc(kn, o));
+        const col2 = periodic ? (k + o + n) % n : k + o;
+        if (col2 >= 0 && col2 < n) add(k, col2, -s * g1 * pc(k, o));
+      }
+      add(k, kn, s * g2);
+      add(k, k, -s * g2);
+      const u = ua[fi];
+      if (u !== 0) {
+        const inflow = side === 1 ? -u : u;
+        if (inflow > 0) add(k, kn, s * inflow); else add(k, k, s * inflow);
+      }
+    }
+  }
+  if (periodic) solver.solveCyclic(a, b, c, d, e, r); else solver.solve(a, b, c, d, e, r);
+  return { a, b, c, d, e };
+}
+
+test('implicit line assembly (closure-free, v0.19.1) is bit-identical to the reference, open and periodic lines', () => {
+  const { geo, fs } = tipDrainSolver({ ns: 40, nphi: 16 });
+  const R = rnd(11);
+  let lines = 0, worst = 0;
+  for (const periodic of [false, true]) for (const n of [5, 6, 9, 16, 40]) for (let trial = 0; trial < 6; trial++) {
+    const idx = new Int32Array(n), cl = new Float64Array(n), gm = new Float64Array(n), gd = new Float64Array(n), ua = new Float64Array(n), Aa = new Float64Array(n), r0 = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+      idx[k] = k; cl[k] = 0.5 + R(); gm[k] = R() * 1e-3; gd[k] = R() < 0.3 ? 0 : R() * 1e-4;
+      ua[k] = R() < 0.3 ? 0 : (R() - 0.5) * 1e-2; Aa[k] = 0.2 + R(); r0[k] = R() - 0.5;
+    }
+    fs.mask.fill(0);
+    if (trial % 2) { fs.mask[Math.floor(R() * n)] = 1; if (trial === 5) fs.mask[0] = 2; }
+    fs.dt = 10 ** (-3 + 4 * R()); fs.gamma = 0.02 + 0.05 * R();
+    const ps = new PentaSolver(n);
+    const r1 = Float64Array.from(r0), r2 = Float64Array.from(r0);
+    const ref = refLineSolve(fs, idx, n, periodic, cl, gm, gd, ua, Aa, r1, ps);
+    fs._lineSolve(idx, n, periodic, cl, gm, gd, ua, Aa, r2, ps);
+    for (const [nm, band] of [['a', fs.la], ['b', fs.lb], ['c', fs.lc], ['d', fs.ld], ['e', fs.le]])
+      for (let k = 0; k < n; k++) assert(Object.is(band[k], ref[nm][k]), `band ${nm}[${k}] differs (n=${n}, periodic=${periodic}): ${band[k]} vs ${ref[nm][k]}`);
+    for (let k = 0; k < n; k++) { assert(Object.is(r2[k], r1[k]), `solution differs at ${k} (n=${n}, periodic=${periodic})`); worst = Math.max(worst, Math.abs(r2[k] - r1[k])); }
+    lines++;
+  }
+  fs.mask.fill(0);
+  return `${lines} random lines (n = 5–40, masked cells, both flow directions, dt 1e-3–10): bands and solutions identical`;
+});
+
+test('cached Arrhenius viscosity factor matches viscosity() exactly as the film temperature changes', () => {
+  const { geo, fs } = tipDrainSolver({ ns: 40, nphi: 16 });
+  fs.coat = { ...COATINGS.ha_thermal, mu0: 0.3 };
+  const R = rnd(5);
+  let checked = 0;
+  for (let pass = 0; pass < 4; pass++) {
+    // change the temperature of some cells between calls (others keep the cached factor)
+    for (let k = 0; k < geo.N; k++) if (pass === 0 || R() < 0.3) fs.Tf[k] = 293 + 60 * R();
+    for (let k = 0; k < geo.N; k++) fs.alpha[k] = 0.2 * R();
+    if (pass === 3) fs.coat = { ...fs.coat, mu0: 0.5 }; // new coating: cache must reset
+    fs._rates();
+    for (let k = 0; k < geo.N; k++) {
+      const ref = viscosity(fs.coat, fs.m[k] / fs.h[k], fs.alpha[k], fs.Tf[k]);
+      assert(Object.is(fs.mu[k], ref), `mu[${k}] ${fs.mu[k]} vs ${ref} (pass ${pass})`);
+      checked++;
+    }
+  }
+  return `${checked} cell viscosities identical`;
 });
 
 run();

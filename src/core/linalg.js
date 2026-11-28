@@ -53,7 +53,8 @@ export class PentaSolver {
     const Z = this.Z;
     for (let k = 0; k < 4; k++) { Z[k].fill(0); Z[k][rows[k]] = 1; this.solveFactored(Z[k]); }
     const y = this.y; for (let i = 0; i < n; i++) y[i] = r[i]; this.solveFactored(y);
-    // V^T rows: corner coefficients
+    // V^T rows: corner coefficients. The 4×4 capacitance system is assembled and solved in
+    // preallocated buffers (same pivoting and arithmetic as solveDense, no per-line allocation).
     const vt = (k, x) => {
       switch (k) {
         case 0: return a[0] * x[n - 2] + b[0] * x[n - 1];
@@ -62,13 +63,12 @@ export class PentaSolver {
         default: return d[n - 1] * x[0] + e[n - 1] * x[1];
       }
     };
-    const M = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
-    const vy = [0, 0, 0, 0];
+    const M = this._M4 || (this._M4 = new Float64Array(16)), z = this._v4 || (this._v4 = new Float64Array(4));
     for (let k = 0; k < 4; k++) {
-      for (let l = 0; l < 4; l++) M[k][l] = (k === l ? 1 : 0) + vt(k, Z[l]);
-      vy[k] = vt(k, y);
+      for (let l = 0; l < 4; l++) M[4 * k + l] = (k === l ? 1 : 0) + vt(k, Z[l]);
+      z[k] = vt(k, y);
     }
-    const z = solveDense(M, vy);
+    solve4InPlace(M, z);
     for (let i = 0; i < n; i++) r[i] = y[i] - (Z[0][i] * z[0] + Z[1][i] * z[1] + Z[2][i] * z[2] + Z[3][i] * z[3]);
     return r;
   }
@@ -96,4 +96,28 @@ export function solveDense(M0, v0) {
     x[i] = sum / M[i][i];
   }
   return x;
+}
+
+// In-place 4×4 solve with partial pivoting; identical arithmetic to solveDense (row-major M, v → x).
+export function solve4InPlace(M, v) {
+  const n = 4;
+  for (let k = 0; k < n; k++) {
+    let p = k;
+    for (let i = k + 1; i < n; i++) if (Math.abs(M[4 * i + k]) > Math.abs(M[4 * p + k])) p = i;
+    if (p !== k) {
+      for (let j = 0; j < n; j++) { const t = M[4 * k + j]; M[4 * k + j] = M[4 * p + j]; M[4 * p + j] = t; }
+      const t = v[k]; v[k] = v[p]; v[p] = t;
+    }
+    for (let i = k + 1; i < n; i++) {
+      const f = M[4 * i + k] / M[4 * k + k];
+      for (let j = k; j < n; j++) M[4 * i + j] -= f * M[4 * k + j];
+      v[i] -= f * v[k];
+    }
+  }
+  for (let i = n - 1; i >= 0; i--) {
+    let sum = v[i];
+    for (let j = i + 1; j < n; j++) sum -= M[4 * i + j] * v[j];
+    v[i] = sum / M[4 * i + i];
+  }
+  return v;
 }

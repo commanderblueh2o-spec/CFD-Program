@@ -9,7 +9,13 @@ export const T_REF = 298.15;
 export const MU_CAP = 1e9; // Pa·s – treated as "set"
 
 export function viscosity(c, phi, alpha, T) {
-  let mu = c.mu0 * Math.exp((c.EaMu * 1000 / GAS_R) * (1 / T - 1 / T_REF));
+  return viscosityAt(c, c.mu0 * Math.exp((c.EaMu * 1000 / GAS_R) * (1 / T - 1 / T_REF)), phi, alpha);
+}
+
+// Same as viscosity() with the Arrhenius part mu0·exp(...) at the film temperature already
+// evaluated (muT), so the solver can reuse it while a cell's temperature is unchanged.
+export function viscosityAt(c, muT, phi, alpha) {
+  let mu = muT;
   if (c.thick > 0 && c.solids < c.phiMax) {
     const p0 = Math.min(c.solids, 0.999 * c.phiMax);
     const p = Math.min(Math.max(phi, p0), 0.995 * c.phiMax);
